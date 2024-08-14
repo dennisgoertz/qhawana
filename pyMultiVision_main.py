@@ -1,4 +1,4 @@
-import math
+# import math
 import exiftool
 import os
 import json
@@ -82,18 +82,18 @@ class Mv_Show:
         json_string = {"scenes": scenes}
         return json_string
 
-    def fromJson(self, json_string: dict):
+    def fromJson(self, json_string: dict, progress_callback):
         self.state = Show_States.STOPPED
-        for s in json_string["scenes"]:
+        num_scenes = len(json_string["scenes"])
+        for i, s in enumerate(json_string["scenes"]):
             scene = Mv_Scene.fromJson(s)
             self.sequence.appendRow(scene)
+            progress_callback.emit(int((i + 1) * 100 / num_scenes))
 
     def getModel(self):
         return self.sequence
 
     def getScene(self, index=0):
-        # return self.sequence[index] if 0 <= index < self.length() else False
-        # index = self.sequence.index(index, 0) if 0 <= index < self.length() else False
         return self.sequence.item(index, 0).data() if 0 <= index < self.length() else False
 
 
@@ -116,6 +116,28 @@ class Mv_Scene:
             elif self.scene_type == Scene_Type.VIDEO:
                 # TODO: Prepare video scene
                 pass
+
+    def __getstate__(self):
+        state = [self.source, self.audio_source, self.scene_type, self.pause, self.duration, self.notes, self.exif]
+        # qbyte_array = QtCore.QByteArray()
+        # stream = QtCore.QDataStream(qbyte_array, QtCore.QIODevice.OpenModeFlag.WriteOnly)
+        # stream << self.pixmap
+        # state.append(qbyte_array)
+        print(state)
+        return state
+
+    def __setstate__(self, state):
+        self.source = state[0]
+        self.audio_source = state[1]
+        self.scene_type = state[2]
+        self.pause = state[3]
+        self.duration = state[4]
+        self.notes = state[5]
+        self.exif = state[6]
+        # stream = QtCore.QDataStream(state[7], QtCore.QIODevice.OpenModeFlag.ReadOnly)
+        # stream >> self.pixmap
+        # self.pixmap = QtGui.QPixmap(self.source)
+        self.pixmap = None
 
     def toJson(self) -> dict:
         json_dict = {"source": self.source,
@@ -140,9 +162,28 @@ class Mv_Scene:
                          duration=json_dict["duration"],
                          notes=json_dict["notes"],
                          exif=json_dict["exif"])
+        # item = MvSceneItem(icon=icon, text=json_dict["filename"])
         item = QtGui.QStandardItem(icon, json_dict["filename"])
+        item.setDropEnabled(False)
         item.setData(scene)
         return item
+
+
+class FilmStripWidget(QtWidgets.QListView):
+    pass
+    # def __init__(self, parent=None):
+    #    super(FilmStripWidget, self).__init__(parent)
+
+
+class FilmStripItemDelegate(QtWidgets.QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super(FilmStripItemDelegate, self).__init__(parent)
+
+    def paint(self, painter, option, index):
+        # model = index.model()
+        self.initStyleOption(option, index)
+        # style = option.widget.style()
+        super(FilmStripItemDelegate, self).paint(painter, option, index)
 
 
 def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
@@ -176,6 +217,10 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
         self.supported_mime_types = get_supported_mime_types()
         self.scene_index = 0
 
+        model = self.mvshow.sequence
+        self.listView_filmStrip.setModel(model)
+        self.tableView_scenes.setModel(model)
+
         self.threadpool = QtCore.QThreadPool()
         print("Multithreading with maximum %d threads" % self.threadpool.maxThreadCount())
         print("Supported media MIME types: %s" % self.supported_mime_types)
@@ -183,14 +228,17 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
         # self.tableView_scenes.setItemDelegateForColumn()
         self.pushButton_mediaSourceDirectory.clicked.connect(self.sceneFromDirectoryDialog)
         self.pushButton_startShow.clicked.connect(self.openPresenterView)
-        self.listView_filmStrip.clicked.connect(self.showScenePreview)
-        self.tableView_scenes.clicked.connect(self.showScenePreview)
+        self.listView_filmStrip.selectionModel().selectionChanged.connect(self.showScenePreview)
+        self.tableView_scenes.selectionModel().selectionChanged.connect(self.showScenePreview)
         self.textEdit_notes.textChanged.connect(self.updateSceneNotes)
         self.actionNew.triggered.connect(self.newProject)
         self.actionOpen.triggered.connect(self.loadFromFile)
         self.actionSave.triggered.connect(self.saveToFile)
         self.actionSave_As.triggered.connect(self.saveAsFileDialog)
         self.actionQuit.triggered.connect(app.quit, QtCore.Qt.ConnectionType.QueuedConnection)
+
+        self.FilmStripDelegate = FilmStripItemDelegate()
+        # self.listView_filmStrip.setItemDelegate(self.FilmStripDelegate)
 
     def newProject(self):
         del self.mvshow
@@ -216,14 +264,18 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
         if not file_name:
             file_name = QtWidgets.QFileDialog.getOpenFileName(self, "Select project file")[0]
         if file_name:
+            self.progressBar.setEnabled(True)
+            self.progressBar.setTextVisible(True)
+
             worker = Worker(self.loadShowFromFile, file_name)
+            worker.signals.progress.connect(self.updateProgressBar)
             worker.signals.finished.connect(self.updateFilmStrip)
             self.threadpool.start(worker)
 
     def loadShowFromFile(self, file_name, progress_callback):
         with open(file_name, 'r') as f:
             json_string = json.load(f)
-        self.mvshow.fromJson(json_string)
+        self.mvshow.fromJson(json_string, progress_callback)
         self.save_file = file_name
 
     def sceneFromDirectoryDialog(self):
@@ -234,7 +286,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             self.progressBar.setTextVisible(True)
 
             worker = Worker(self.populateModelFromDirectory, dir_name)
-            worker.signals.progress.connect(self.populateModelFromDirectory_progress)
+            worker.signals.progress.connect(self.updateProgressBar)
             worker.signals.finished.connect(self.updateFilmStrip)
             self.threadpool.start(worker)
 
@@ -246,6 +298,10 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             path = os.path.join(dir_name, file)
             mimetype, encoding = mimetypes.guess_type(path)
 
+            if mimetype is None:
+                print(f"Failed to get Mimetype for {file}.")
+                continue
+
             if mimetype.startswith("image/"):
                 audiopath = "/home/scout/mp3/[Soundtracks]/Hans Zimmer/2000 - Gladiator/12-Slaves to Rome.mp3"
                 pixmap = QtGui.QPixmap(path)
@@ -256,32 +312,33 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                                  pixmap=pixmap,
                                  scene_type=Scene_Type.STILL,
                                  exif=exiftool.ExifToolHelper().get_metadata(path))
-                item = QtGui.QStandardItem(icon, file)
-                item.setData(scene)
-                self.mvshow.sequence.appendRow(item)
+                # item = MvSceneItem(icon=icon, text=file)
             elif mimetype.startswith("video/") and mimetype in self.supported_mime_types:
                 # TODO: Generate video thumbnail and store it in the QPixmap
                 pixmap = QtGui.QPixmap(100, 100)
                 pixmap.fill(QtGui.QColor("black"))
                 icon = QtGui.QIcon()
                 icon.addPixmap(pixmap, QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.Off)
-                scene = Mv_Scene(source=path, scene_type=Scene_Type.VIDEO)
-                item = QtGui.QStandardItem(icon, file)
-                item.setData(scene)
-                self.mvshow.sequence.appendRow(item)
+                scene = Mv_Scene(source=path,
+                                 pixmap=pixmap,
+                                 scene_type=Scene_Type.VIDEO)
+            else:
+                print(f"File {file} is not supported.")
+                continue
+
+            item = QtGui.QStandardItem(icon, file)
+            item.setData(scene)
+            item.setDropEnabled(False)
+            self.mvshow.sequence.appendRow(item)
 
             progress_callback.emit(int((index + 1) * 100 / num_files))
 
         return True
 
-    def populateModelFromDirectory_progress(self, percentage):
+    def updateProgressBar(self, percentage):
         self.progressBar.setValue(percentage)
 
     def updateFilmStrip(self):
-        model = self.mvshow.sequence
-
-        self.listView_filmStrip.setModel(model)
-        self.tableView_scenes.setModel(model)
         self.tableView_scenes.resizeColumnsToContents()
 
         self.progressBar.setEnabled(False)
@@ -298,13 +355,16 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             dialog.setText("Please add scenes first.")
             dialog.exec()
 
-    def showScenePreview(self, index):
-        self.tableView_scenes.setCurrentIndex(index)
-        self.listView_filmStrip.setCurrentIndex(index)
-        self.scene_index = index.row()
-        scene = self.mvshow.sequence.item(self.scene_index).data()
-        self.label_mediaPreview.setPixmap(scalePixmapToWidget(self.label_mediaPreview, getPixmapFromScene(scene)))
-        self.textEdit_notes.setText(scene.notes)
+    def showScenePreview(self, selection):
+        # self.tableView_scenes.setCurrentIndex(index)
+        # self.listView_filmStrip.setCurrentIndex(index)
+
+        indexes = selection.indexes()
+        if len(indexes) > 0:
+            self.scene_index = indexes[0].row()
+            scene = self.mvshow.sequence.item(self.scene_index).data()
+            self.label_mediaPreview.setPixmap(scalePixmapToWidget(self.label_mediaPreview, getPixmapFromScene(scene)))
+            self.textEdit_notes.setText(scene.notes)
 
     def updateSceneNotes(self):
         scene = self.mvshow.sequence.item(self.scene_index).data()
@@ -323,7 +383,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
         self.pushButton_play.clicked.connect(self.startShow)
         self.pushButton_previousView.clicked.connect(lambda x: self.changeScene("prev"))
-        self.pushButton_nextView.clicked.connect(lambda x: self.changeScene("next"))
+        self.pushButton_nextView.clicked.connect(self.mv.fadeOutScene)
         self.pushButton_audio_mute.clicked.connect(lambda x: self.controlAudio("mute"))
         self.pushButton_audio_quiet.clicked.connect(lambda x: self.controlAudio("quiet"))
         self.pushButton_audio_fadeIn.clicked.connect(lambda x: self.controlAudio("fade_in"))
@@ -337,7 +397,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
         self.fade_out_anim = QtCore.QPropertyAnimation(self.mv.audioOutput, b"volume")
         self.fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
-        self.fade_out_anim.setKeyValueAt(0.01, self.audio_volume)
+        self.fade_out_anim.setKeyValueAt(0.01, 0.01)
 
         self.fade_in_anim.finished.connect(self.fadeInFinished)
         self.fade_in_anim.finished.connect(lambda: self.uncheckPushButton(self.pushButton_audio_fadeIn))
@@ -501,6 +561,26 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
         self.audioPlayer.setAudioOutput(self.audioOutput)
         self.audioPlayer.setLoops(QtMultimedia.QMediaPlayer.Loops.Infinite)
 
+        self.opacityEffect = QtWidgets.QGraphicsOpacityEffect(self.label_image)
+        self.label_image.setGraphicsEffect(self.opacityEffect)
+
+        self.fade_in_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
+        self.fade_in_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
+        self.fade_in_anim.setDuration(1000)
+        self.fade_in_anim.setStartValue(0)
+        self.fade_in_anim.setEndValue(1)
+
+        self.fade_out_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
+        self.fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
+        self.fade_out_anim.setDuration(1000)
+        self.fade_out_anim.setStartValue(1)
+        self.fade_out_anim.setEndValue(0)
+
+        # self.fade_in_anim.finished.connect(self.fadeInFinished)
+        # self.fade_in_anim.finished.connect(lambda: self.uncheckPushButton(self.pushButton_audio_fadeIn))
+        self.fade_out_anim.finished.connect(lambda: parent.changeScene("next"))
+        # self.fade_out_anim.finished.connect(lambda: self.uncheckPushButton(self.pushButton_audio_fadeOut))
+
     def eventFilter(self, source, event):
         if source is self and event.type() in (
                 QtCore.QEvent.Type.Resize, QtCore.QEvent.Type.Move, QtCore.QEvent.Type.Show):
@@ -518,9 +598,16 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.videoWidget.setFixedSize(window_size)
         return super(Ui_multiVisionShow, self).eventFilter(source, event)
 
+    def fadeOutScene(self):
+        self.fade_out_anim.start()
+
+    def fadeInScene(self):
+        self.fade_in_anim.start()
+
     def loadScene(self, scene: Mv_Scene):
         if scene.scene_type == Scene_Type.STILL:
-            if not scene.pixmap:
+            if scene.pixmap is None:
+                scene.pixmap = QtGui.QPixmap()
                 scene.pixmap.load(scene.source)
             self.videoPlayer.stop()
             self.videoWidget.hide()
@@ -529,6 +616,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                                                            QtCore.Qt.TransformationMode.SmoothTransformation))
             self.label_image.show()
             self.label_image.raise_()
+            self.fade_in_anim.start()
         elif scene.scene_type == Scene_Type.VIDEO:
             self.label_image.hide()
             # TODO: Check if MIME Type of scene.source is supported and the file exists

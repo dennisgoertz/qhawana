@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1280</width>
-    <height>720</height>
+    <height>1029</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -36,11 +36,11 @@
      <set>Qt::AlignmentFlag::AlignCenter</set>
     </property>
    </widget>
-   <widget class="QListView" name="listView_filmStrip">
+   <widget class="FilmStripWidget" name="listView_filmStrip">
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>490</y>
+      <y>790</y>
       <width>1261</width>
       <height>151</height>
      </rect>
@@ -52,16 +52,19 @@
      <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOn</enum>
     </property>
     <property name="autoScroll">
-     <bool>false</bool>
+     <bool>true</bool>
     </property>
-    <property name="dragEnabled">
+    <property name="showDropIndicator" stdset="0">
      <bool>true</bool>
     </property>
     <property name="dragDropMode">
      <enum>QAbstractItemView::DragDropMode::InternalMove</enum>
     </property>
-    <property name="defaultDropAction">
-     <enum>Qt::DropAction::IgnoreAction</enum>
+    <property name="selectionMode">
+     <enum>QAbstractItemView::SelectionMode::ContiguousSelection</enum>
+    </property>
+    <property name="selectionBehavior">
+     <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
     </property>
     <property name="iconSize">
      <size>
@@ -69,11 +72,17 @@
       <height>100</height>
      </size>
     </property>
+    <property name="movement">
+     <enum>QListView::Movement::Snap</enum>
+    </property>
     <property name="flow">
      <enum>QListView::Flow::LeftToRight</enum>
     </property>
     <property name="isWrapping" stdset="0">
      <bool>false</bool>
+    </property>
+    <property name="spacing">
+     <number>15</number>
     </property>
     <property name="gridSize">
      <size>
@@ -159,7 +168,7 @@
     <property name="geometry">
      <rect>
       <x>1130</x>
-      <y>650</y>
+      <y>950</y>
       <width>141</width>
       <height>25</height>
      </rect>
@@ -254,7 +263,7 @@
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>650</y>
+      <y>950</y>
       <width>118</width>
       <height>23</height>
      </rect>
@@ -272,8 +281,23 @@
       <x>10</x>
       <y>100</y>
       <width>561</width>
-      <height>381</height>
+      <height>681</height>
      </rect>
+    </property>
+    <property name="showDropIndicator" stdset="0">
+     <bool>true</bool>
+    </property>
+    <property name="dragDropOverwriteMode">
+     <bool>false</bool>
+    </property>
+    <property name="dragDropMode">
+     <enum>QAbstractItemView::DragDropMode::InternalMove</enum>
+    </property>
+    <property name="selectionMode">
+     <enum>QAbstractItemView::SelectionMode::ContiguousSelection</enum>
+    </property>
+    <property name="selectionBehavior">
+     <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
     </property>
    </widget>
    <widget class="QTextEdit" name="textEdit_notes">
@@ -296,6 +320,22 @@
     </property>
     <property name="placeholderText">
      <string>Notes</string>
+    </property>
+   </widget>
+   <widget class="QTreeView" name="treeView">
+    <property name="geometry">
+     <rect>
+      <x>580</x>
+      <y>490</y>
+      <width>691</width>
+      <height>291</height>
+     </rect>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="dragDropMode">
+     <enum>QAbstractItemView::DragDropMode::DropOnly</enum>
     </property>
    </widget>
   </widget>
@@ -397,6 +437,13 @@
    </property>
   </action>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>FilmStripWidget</class>
+   <extends>QListView</extends>
+   <header>pyMultiVision_main</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
  <slots>
