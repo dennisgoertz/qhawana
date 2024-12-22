@@ -58,13 +58,3 @@ class Ui_Form_multiVisionShow(object):
     def retranslateUi(self, Form_multiVisionShow):
         pass
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-
-
-if __name__ == "__main__":
-    import sys
-    app = QtWidgets.QApplication(sys.argv)
-    Form_multiVisionShow = QtWidgets.QWidget()
-    ui = Ui_Form_multiVisionShow()
-    ui.setupUi(Form_multiVisionShow)
-    Form_multiVisionShow.show()
-    sys.exit(app.exec())
