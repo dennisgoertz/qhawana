@@ -812,7 +812,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
 
 class BinItem(QtGui.QStandardItem):
     def __init__(self, *__args):
-        QtGui.QStandardItem.__init__(self, *__args)
+        super().__init__()
 
 
 def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
@@ -1180,6 +1180,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                                                       QtCore.Qt.TransformationMode.SmoothTransformation),
                                  scene_type=Scene_Type.STILL,
                                  exif=exif_data)
+                QtCore.qDebug(f"Adding image scene from file {path}")
 
                 # print(f"ExifTool: {scene.exif}")
                 # print(f"PIL: {exif_tags}")
@@ -1190,6 +1191,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                     bin_item.setData(scene.exif["EXIF:CreateDate"])
                 parent = self.project.bin.findItems("STILLS", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
                 parent.appendRow(bin_item)
+                QtCore.qDebug(f"Adding image file {path} to project bin")
             elif mimetype.startswith("video/") and mimetype in self.supported_mime_types:
                 keyframe_image = getKeyframeFromVideo(path)
                 pixmap = QtGui.QPixmap().fromImage(keyframe_image)
@@ -1210,16 +1212,18 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                                  duration=duration,
                                  in_point = in_point,
                                  out_point = out_point)
+                QtCore.qDebug(f"Adding video scene from file {path} with duration {duration} ms, "
+                              f"in point {in_point} ms and out point {out_point} ms")
 
                 bin_item = QtGui.QStandardItem(path)
                 parent = self.project.bin.findItems("VIDEO", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
-                QtCore.qDebug(f"Adding video scene from file {path} with duration {duration} ms, "
-                              f"in point {in_point} ms and out point {out_point} ms")
                 parent.appendRow(bin_item)
+                QtCore.qDebug(f"Adding video file {path} to project bin")
             elif mimetype.startswith("audio/"):
                 bin_item = QtGui.QStandardItem(path)
                 parent = self.project.bin.findItems("AUDIO", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
                 parent.appendRow(bin_item)
+                QtCore.qDebug(f"Adding audio file {path} to project bin")
                 # Audio items will only be added to the project bin, but no scene item will be created, so continue:
                 continue
             else:
@@ -1631,6 +1635,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.label_currentView.setPixmap(scalePixmapToWidget(self.label_currentView, getPixmapFromScene(scene)))
         self.label_previousView.setPixmap(scalePixmapToWidget(self.label_previousView, getPixmapFromScene(prev_scene)))
         self.label_nextView.setPixmap(scalePixmapToWidget(self.label_nextView, getPixmapFromScene(next_scene)))
+        self.label_notes.setText(scene.notes)
 
 
 class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
