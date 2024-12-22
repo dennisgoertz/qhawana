@@ -124,13 +124,14 @@ class Mv_Show(QtCore.QObject):
     def length(self):
         return self.sequence.rowCount()
 
-    def toJson(self):
+    def toJson(self, progress_callback):
         scenes = []
-        for index in range(self.sequence.rowCount()):
+        num_scenes = self.sequence.rowCount()
+        for index in range(num_scenes):
             item = self.sequence.item(index)
             scene_data = item.toJson(store_pixmap=True)
-            # scene_data["filename"] = item.text()
             scenes.append(scene_data)
+            progress_callback.emit((index + 1) // num_scenes * 100)
         json_string = {"scenes": scenes}
         return json_string
 
@@ -139,7 +140,7 @@ class Mv_Show(QtCore.QObject):
         self.set_state(Show_States.STOPPED)
         num_scenes = len(json_string["scenes"])
         for i, s in enumerate(json_string["scenes"]):
-            progress_callback.emit(int((i + 1) * 100 / num_scenes))
+            progress_callback.emit((i + 1) // num_scenes * 100)
             scene = Mv_Scene.fromJson(s)
             self.sequence.appendRow(scene)
 
@@ -995,7 +996,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             self.mvshow.sequence.__init__()
             self.save_file = None
             self.scene_index = 0
-            self.updateFilmStrip()
+            self.resetProgressBar()
         else:
             answer = self.saveChangesDialog()
 
@@ -1041,10 +1042,16 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
     def saveToFile(self):
         if self.save_file:
-            with gzip.open(self.save_file, 'wt', encoding='ascii') as f:
-            # with open(self.save_file, 'w') as f:
-                # json.dump(self.mvshow.toJson(), f, ensure_ascii=False, indent=4)
-                json.dump(self.mvshow.toJson(), f)
+            self.lockSequence()
+
+            self.progressBar.setEnabled(True)
+            self.progressBar.setTextVisible(True)
+
+            worker = Worker(self.saveProjectToFile, self.save_file)
+            worker.signals.progress.connect(self.progressBar.setValue)
+            worker.signals.finished.connect(self.resetProgressBar)
+            worker.signals.finished.connect(self.unlockSequence)
+            self.threadpool.start(worker)
 
             self.changes_saved = True
             self.radioButton_changes.setChecked(False)
@@ -1058,12 +1065,15 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             if not file_name:
                 file_name = QtWidgets.QFileDialog.getOpenFileName(self, "Select project file")[0]
             if file_name:
+                self.lockSequence()
+
                 self.progressBar.setEnabled(True)
                 self.progressBar.setTextVisible(True)
 
-                worker = Worker(self.loadShowFromFile, file_name)
+                worker = Worker(self.loadProjectFromFile, file_name)
                 worker.signals.progress.connect(self.progressBar.setValue)
-                worker.signals.finished.connect(self.updateFilmStrip)
+                worker.signals.finished.connect(self.resetProgressBar)
+                worker.signals.finished.connect(self.unlockSequence)
                 self.threadpool.start(worker)
 
                 self.changes_saved = True
@@ -1097,7 +1107,11 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
         return answer
 
-    def loadShowFromFile(self, file_name, progress_callback):
+    def saveProjectToFile(self, file_name, progress_callback):
+        with gzip.open(self.save_file, 'wt', encoding='ascii') as f:
+            json.dump(self.mvshow.toJson(progress_callback), f)
+
+    def loadProjectFromFile(self, file_name, progress_callback):
         try:
             with gzip.open(file_name, 'r') as f:
                 json_string = json.load(f)
@@ -1117,7 +1131,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
             worker = Worker(self.populateModelFromDirectory, dir_name)
             worker.signals.progress.connect(self.progressBar.setValue)
-            worker.signals.finished.connect(self.updateFilmStrip)
+            worker.signals.finished.connect(self.resetProgressBar)
             self.threadpool.start(worker)
             # self.populateModelFromDirectory(dir_name, None)
 
@@ -1223,10 +1237,18 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
         return True
 
-    def updateFilmStrip(self):
+    def resetProgressBar(self):
         self.progressBar.setEnabled(False)
         self.progressBar.setTextVisible(False)
         self.progressBar.setValue(0)
+
+    def lockSequence(self):
+        self.tableView_scenes.setEnabled(False)
+        self.listView_filmStrip.setEnabled(False)
+
+    def unlockSequence(self):
+        self.tableView_scenes.setEnabled(True)
+        self.listView_filmStrip.setEnabled(True)
 
     def openPresenterView(self):
         if self.mvshow.length() > 0:
