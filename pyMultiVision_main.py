@@ -1436,11 +1436,11 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.parent.mvshow.state_changed.connect(lambda x: self.scene_runner())
         self.scene_changed.connect(self.scene_runner)
 
-        self.audio_fade_in_anim = QtCore.QPropertyAnimation(self.mv.audioOutput, b"volume")
+        self.audio_fade_in_anim = QtCore.QPropertyAnimation(self.mv.musicAudioOutput, b"volume")
         self.audio_fade_in_anim.setEasingCurve(QtCore.QEasingCurve.Type.InCubic)
         self.audio_fade_in_anim.setKeyValueAt(0.01, 0.01)
 
-        self.audio_fade_out_anim = QtCore.QPropertyAnimation(self.mv.audioOutput, b"volume")
+        self.audio_fade_out_anim = QtCore.QPropertyAnimation(self.mv.musicAudioOutput, b"volume")
         self.audio_fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
         self.audio_fade_out_anim.setKeyValueAt(0.01, 0.01)
 
@@ -1555,16 +1555,16 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
     def updateDialPosition(self):
         # self.dial_volume.setValue(int(round(100 ** self.audio_volume, 0)))
-        self.dial_volume.setValue(int(round(self.mv.audioOutput.volume() * 100)))
+        self.dial_volume.setValue(int(round(self.mv.musicAudioOutput.volume() * 100)))
 
     def controlAudio(self, action):
         if action == "mute":
             if self.pushButton_audio_mute.isChecked():
-                self.mv.audioOutput.setMuted(True)
+                self.mv.musicAudioOutput.setMuted(True)
                 self.pushButton_audio_fadeOut.setEnabled(False)
                 self.pushButton_audio_quiet.setEnabled(False)
             else:
-                self.mv.audioOutput.setMuted(False)
+                self.mv.musicAudioOutput.setMuted(False)
                 self.pushButton_audio_fadeOut.setEnabled(True)
                 self.pushButton_audio_quiet.setEnabled(True)
         elif action == "quiet":
@@ -1574,35 +1574,35 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
                 self.pushButton_audio_mute.setEnabled(False)
 
                 self.audio_fade_out_anim.setDuration(500)
-                self.audio_fade_out_anim.setStartValue(self.mv.audioOutput.volume())
-                self.audio_fade_out_anim.setEndValue(self.mv.audioOutput.volume() / 8)
+                self.audio_fade_out_anim.setStartValue(self.mv.musicAudioOutput.volume())
+                self.audio_fade_out_anim.setEndValue(self.mv.musicAudioOutput.volume() / 8)
                 self.audio_fade_out_anim.start()
             else:
                 self.audio_fade_in_anim.setDuration(500)
-                self.audio_fade_in_anim.setStartValue(self.mv.audioOutput.volume())
-                self.audio_fade_in_anim.setEndValue(self.mv.audioOutput.volume() * 8)
+                self.audio_fade_in_anim.setStartValue(self.mv.musicAudioOutput.volume())
+                self.audio_fade_in_anim.setEndValue(self.mv.musicAudioOutput.volume() * 8)
                 self.audio_fade_in_anim.start()
         elif action == "fade_in":
             if self.pushButton_audio_mute.isChecked():
-                self.mv.audioOutput.setMuted(False)
+                self.mv.musicAudioOutput.setMuted(False)
                 self.pushButton_audio_mute.setChecked(False)
 
             self.disableAudioButtons()
 
             self.audio_fade_in_anim.setDuration(self.spinBox_audio_fadeTime.value() * 1000)
-            self.audio_fade_in_anim.setStartValue(self.mv.audioOutput.volume())
+            self.audio_fade_in_anim.setStartValue(self.mv.musicAudioOutput.volume())
             self.audio_fade_in_anim.setEndValue(1)
             self.audio_fade_in_anim.start()
         elif action == "fade_out":
             self.disableAudioButtons()
 
             self.audio_fade_out_anim.setDuration(self.spinBox_audio_fadeTime.value() * 1000)
-            self.audio_fade_out_anim.setStartValue(self.mv.audioOutput.volume())
+            self.audio_fade_out_anim.setStartValue(self.mv.musicAudioOutput.volume())
             self.audio_fade_out_anim.setEndValue(0)
             self.audio_fade_out_anim.start()
         elif action == "volume":
             # self.audio_volume = math.log(self.dial_volume.value(), 100)
-            self.mv.audioOutput.setVolume(self.dial_volume.value() / 100)
+            self.mv.musicAudioOutput.setVolume(self.dial_volume.value() / 100)
 
 
     def startShow(self):
@@ -1646,15 +1646,16 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
         self.installEventFilter(self)
         self.videoPlayer = QtMultimedia.QMediaPlayer(parent=self)
         self.audioPlayer = QtMultimedia.QMediaPlayer(parent=self)
-        self.audioOutput = QtMultimedia.QAudioOutput(parent=self)
+        self.videoAudioOutput = QtMultimedia.QAudioOutput(parent=self)
+        self.musicAudioOutput = QtMultimedia.QAudioOutput(parent=self)
         self.supported_mimetypes = get_supported_mime_types()
 
         self.videoPlayer.setVideoOutput(self.videoWidget)
-        self.videoPlayer.setAudioOutput(self.audioOutput)
+        self.videoPlayer.setAudioOutput(self.videoAudioOutput)
         self.videoWidget.setGeometry(self.label_image.geometry())
         self.videoWidget.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
 
-        self.audioPlayer.setAudioOutput(self.audioOutput)
+        self.audioPlayer.setAudioOutput(self.musicAudioOutput)
         self.audioPlayer.setLoops(QtMultimedia.QMediaPlayer.Loops.Infinite)
 
         self.opacityEffect = QtWidgets.QGraphicsOpacityEffect()
