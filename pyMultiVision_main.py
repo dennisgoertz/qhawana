@@ -21,7 +21,6 @@ from ui_mainWindow import Ui_mainWindow_pyMultiVision
 from ui_presenterView import Ui_Form_presenterView
 from ui_multiVisionShow import Ui_Form_multiVisionShow
 
-
 MV_ICON_SIZE = 50
 MV_PREVIEW_SIZE = 800
 BUF_SIZE = 65536
@@ -232,7 +231,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
               role == QtCore.Qt.ItemDataRole.EditRole):
             return str(item_data.out_point)
 
-    def setData(self, index, value, role = ...):
+    def setData(self, index, value, role=...):
         if role == QtCore.Qt.ItemDataRole.EditRole and index.column() in [4, 5]:
             item = self._sequence[index.row()]
             item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
@@ -296,13 +295,13 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
     def appendRow(self, item: QtGui.QStandardItem):
         length = self.rowCount()
-        self.beginInsertRows(self.index(self.rowCount() - 1, 0), length - 1, length)
+        self.beginInsertRows(self.index(self.rowCount() - 1, 0), length, length)
         scene = item.data()
         self._scenes[scene.uuid] = scene
         item.setData(scene.uuid, QtCore.Qt.ItemDataRole.UserRole)
         self._sequence.append(item)
-
-        self.rowsInserted.emit(QtCore.QModelIndex(), length - 1, length)
+        self.endInsertRows()
+        self.rowsInserted.emit(QtCore.QModelIndex(), length, length)
 
     def setHorizontalHeaderLabels(self, labels):
         self._horizontal_headers.clear()
@@ -311,10 +310,12 @@ class Mv_sequence(QtCore.QAbstractTableModel):
         self.headerDataChanged.emit(QtCore.Qt.Orientation.Horizontal, 0, len(labels) - 1)
 
     def item(self, row, column=0):
-        if not row <= self.rowCount():
-            QtCore.qWarning("Sequence item index is out of bounds")
+        try:
+            item = self._sequence[row]
+        except IndexError:
+            QtCore.qWarning(f"Sequence item index is out of bounds "
+                            f"(Item {row} requested, sequence has {self.rowCount()} items)")
             return False
-        item = self._sequence[row]
         item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
         if item_uuid is None or item_uuid.isNull():
             QtCore.qWarning("Item in sequence does not have a valid UUID")
@@ -420,7 +421,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
             scene = self._scenes[scene_uuid]
             scene.audio_source = item
 
-            changed_index = self.index(row,column)
+            changed_index = self.index(row, column)
             self.dataChanged.emit(changed_index, changed_index)
 
             return True
@@ -462,13 +463,23 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
         return False
 
+    def inheritAudio(self, selection: list[QtCore.QModelIndex]):
+        print(f"Received {selection} of {len(selection)} rows")
+        selection.sort(key=lambda x: x.row())
+        audio_source = self.item(selection[0].row()).audio_source
+        if audio_source:
+            for i in selection:
+                QtCore.qDebug(f"Setting audio source {audio_source} to scene {i.row()}")
+                self.item(i.row()).audio_source = audio_source
+
 
 class Mv_Scene(QtGui.QStandardItem):
     def __init__(self, source: str, scene_type: Scene_Type, audio_source="", pause=False, duration=-1,
-                 in_point=-1, out_point=-1, pixmap=None, notes="", exif=None):
+                 in_point=-1, out_point=-1, play_video_audio=False, pixmap=None, notes="", exif=None):
 
         self.uuid = QtCore.QUuid().createUuid()
         self.source = source
+        self.source_hash = ""
         self.audio_source = audio_source
         self.audio_source_hash = ""
         self.scene_type = scene_type
@@ -476,29 +487,40 @@ class Mv_Scene(QtGui.QStandardItem):
         self.duration = duration
         self.in_point = in_point
         self.out_point = out_point
+        self.play_video_audio = play_video_audio
         self.pixmap = pixmap
         self.notes = notes
         self.exif = exif
 
         if self.source:
             file_sha1 = hashlib.sha1()
-            with open(source, 'rb') as f:
-                while True:
-                    data = f.read(BUF_SIZE)
-                    if not data:
-                        break
-                    file_sha1.update(data)
-            self.source_hash = file_sha1.hexdigest()
+            try:
+                with open(self.source, 'rb') as f:
+                    while True:
+                        data = f.read(BUF_SIZE)
+                        if not data:
+                            break
+                        file_sha1.update(data)
+            except FileNotFoundError:
+                QtCore.qWarning(f"Source file {self.source} not found for scene {self.uuid.toString()}")
+                pass
+            else:
+                self.source_hash = file_sha1.hexdigest()
 
         if self.audio_source:
             file_sha1 = hashlib.sha1()
-            with open(audio_source, 'rb') as f:
-                while True:
-                    data = f.read(BUF_SIZE)
-                    if not data:
-                        break
-                    file_sha1.update(data)
-            self.audio_source_hash = file_sha1.hexdigest()
+            try:
+                with open(self.audio_source, 'rb') as f:
+                    while True:
+                        data = f.read(BUF_SIZE)
+                        if not data:
+                            break
+                        file_sha1.update(data)
+            except FileNotFoundError:
+                QtCore.qWarning(f"Audio source file {self.audio_source} not found for scene {self.uuid.toString()}")
+                pass
+            else:
+                self.audio_source_hash = file_sha1.hexdigest()
 
         self.icon = QtGui.QIcon()
         self.icon.addPixmap(self.pixmap.scaled(MV_ICON_SIZE, MV_ICON_SIZE,
@@ -545,6 +567,7 @@ class Mv_Scene(QtGui.QStandardItem):
                      "duration": self.duration,
                      "in_point": self.in_point,
                      "out_point": self.out_point,
+                     "play_video_audio": self.play_video_audio,
                      "notes": self.notes,
                      "exif": self.exif}
         if store_pixmap and self.pixmap:
@@ -574,17 +597,36 @@ class Mv_Scene(QtGui.QStandardItem):
                        QtGui.QIcon.State.Off)
 
         scene = Mv_Scene(source=json_dict["source"],
-                         audio_source=json_dict["audio_source"],
+                         scene_type=json_dict["scene_type"],
                          pixmap=pixmap.scaled(MV_PREVIEW_SIZE, MV_PREVIEW_SIZE,
                                               QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                              QtCore.Qt.TransformationMode.SmoothTransformation),
-                         scene_type=json_dict["scene_type"],
-                         pause=json_dict["pause"],
-                         duration=json_dict["duration"],
-                         in_point=json_dict["in_point"],
-                         out_point=json_dict["out_point"],
-                         notes=json_dict["notes"],
-                         exif=json_dict["exif"])
+                                              QtCore.Qt.TransformationMode.SmoothTransformation)
+                         )
+
+        if "play_video_audio" in json_dict:
+            scene.play_video_audio = json_dict["play_video_audio"]
+        elif scene.scene_type == Scene_Type.VIDEO:
+            with av.open(scene.source) as container:
+                # Set scene's play_video_audio property to True if the video has an audio stream:
+                scene.play_video_audio = (len(container.streams.audio) > 0)
+        if "audio_source" in json_dict:
+            scene.audio_source = json_dict["audio_source"]
+        if "pause" in json_dict:
+            scene.pause = json_dict["pause"]
+        if "duration" in json_dict:
+            scene.duration = json_dict["duration"]
+        if "in_point" in json_dict:
+            scene.in_point = json_dict["in_point"]
+        if "out_point" in json_dict:
+            scene.out_point = json_dict["out_point"]
+        if "notes" in json_dict:
+            scene.notes = json_dict["notes"]
+        if "exif" in json_dict:
+            scene.exif = json_dict["exif"]
+        if "source_hash" in json_dict:
+            scene.source_hash = json_dict["source_hash"]
+        if "audio_source_hash" in json_dict:
+            scene.audio_source_hash = json_dict["audio_source_hash"]
 
         item = QtGui.QStandardItem(icon, json_dict["source"])
         item.setDropEnabled(False)
@@ -632,6 +674,7 @@ class SceneTableWidget(QtWidgets.QTableView):
     def contextMenuEvent(self, e):
         handled = False
         index = self.indexAt(e.pos())
+
         menu = QtWidgets.QMenu()
         # dummy = QtGui.QAction("Dummy action", menu) # default action for all columns
 
@@ -641,6 +684,15 @@ class SceneTableWidget(QtWidgets.QTableView):
             menu.addAction(action_1)
             handled = True
         elif index.column() == 1:
+            action_2 = QtGui.QAction("Inherit audio from above", menu)
+            selected_rows = []
+            item_selection = self.selectionModel().selection()
+            for selected_index in item_selection.indexes():
+                if selected_index.column() == 0:
+                    selected_rows.append(selected_index)
+            if len(selected_rows) > 1:
+                action_2.triggered.connect(lambda x: self.model().inheritAudio(selected_rows))
+                menu.addAction(action_2)
             handled = True
 
         if handled:
@@ -680,7 +732,7 @@ class SceneTableWidget(QtWidgets.QTableView):
 
             formats = e.mimeData().formats()
             if ("x-application-pyMultiVision-STILLS" in formats or "x-application-pyMultiVision-VIDEO" in formats and
-                    index.column() == 0) or ("x-application-pyMultiVision-AUDIO" in formats and index.column() == 1):
+                index.column() == 0) or ("x-application-pyMultiVision-AUDIO" in formats and index.column() == 1):
                 self.setDropIndicatorShown(True)
                 e.accept()
             else:
@@ -820,14 +872,14 @@ def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
         #if type(scene.pixmap) is QtGui.QPixmap:
         #    pixmap = scene.pixmap
         #else:
-            if scene.scene_type == Scene_Type.STILL:
-                pixmap = QtGui.QPixmap(scene.source)
-            elif scene.scene_type == Scene_Type.VIDEO:
-                image = getKeyframeFromVideo(scene.source)
-                pixmap = QtGui.QPixmap().fromImage(image)
-            else:
-                pixmap = QtGui.QPixmap(100, 100)
-                pixmap.fill(QtGui.QColor("black"))
+        if scene.scene_type == Scene_Type.STILL:
+            pixmap = QtGui.QPixmap(scene.source)
+        elif scene.scene_type == Scene_Type.VIDEO:
+            image = getKeyframeFromVideo(scene.source)
+            pixmap = QtGui.QPixmap().fromImage(image)
+        else:
+            pixmap = QtGui.QPixmap(100, 100)
+            pixmap.fill(QtGui.QColor("black"))
     else:
         pixmap = QtGui.QPixmap(100, 100)
         pixmap.fill(QtGui.QColor("black"))
@@ -898,6 +950,7 @@ def timeStringFromMsec(msec: int):
 
     return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
+
 class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
     def __init__(self):
         QtWidgets.QMainWindow.__init__(self)
@@ -962,6 +1015,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
         self.mvshow.sequence.layoutChanged.connect(self.changed)
         self.mvshow.sequence.rowsInserted.connect(self.changed)
         self.mvshow.sequence.rowsRemoved.connect(self.changed)
+        self.mvshow.sequence.rowsRemoved.connect(self.showScenePreview)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.syncSelection)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.showScenePreview)
         self.listView_filmStrip.selectionModel().selectionChanged.connect(self.syncSelection)
@@ -1021,10 +1075,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             answer = self.saveChangesDialog()
 
             if answer == QtWidgets.QMessageBox.StandardButton.Save:
-                if self.saveToFile():
-                    app.quit()
-                else:
-                    QtCore.qWarning("Could not save project.")
+                self.saveToFile()
             elif answer == QtWidgets.QMessageBox.StandardButton.Discard:
                 self.changes_saved = True
                 self.radioButton_changes.setChecked(False)
@@ -1149,8 +1200,8 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                 continue
 
             if os.path.isfile(path) and (
-                path.endswith(".xmp") or
-                path.endswith(".pmv")
+                    path.endswith(".xmp") or
+                    path.endswith(".pmv")
             ):
                 # We are not interested in certain files like XMP or our own project files
                 continue
@@ -1197,6 +1248,13 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                 pixmap = QtGui.QPixmap().fromImage(keyframe_image)
 
                 with av.open(path) as container:
+                    if len(container.streams.video) == 0:
+                        QtCore.qDebug(f"Video file {path} does not contain a video stream")
+                        continue
+
+                    # Set scene's play_video_audio property to True if the video has an audio stream:
+                    play_video_audio = (len(container.streams.audio) > 0)
+
                     stream = container.streams.video[0]
                     duration = int(stream.duration * stream.time_base * 1000)
                     in_point = int(stream.start_time * stream.time_base * 1000)
@@ -1210,8 +1268,9 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                                  scene_type=Scene_Type.VIDEO,
                                  exif=exif_data,
                                  duration=duration,
-                                 in_point = in_point,
-                                 out_point = out_point)
+                                 in_point=in_point,
+                                 out_point=out_point,
+                                 play_video_audio=play_video_audio)
                 QtCore.qDebug(f"Adding video scene from file {path} with duration {duration} ms, "
                               f"in point {in_point} ms and out point {out_point} ms")
 
@@ -1441,7 +1500,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.audio_fade_in_anim.setKeyValueAt(0.01, 0.01)
 
         self.audio_fade_out_anim = QtCore.QPropertyAnimation(self.mv.musicAudioOutput, b"volume")
-        self.audio_fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        self.audio_fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.InCubic)
         self.audio_fade_out_anim.setKeyValueAt(0.01, 0.01)
 
         self.progress_animation = QtCore.QPropertyAnimation(self.progressBar_state, b"value")
@@ -1458,6 +1517,10 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
         self.updateDialPosition()
         self.changeScene("first")
+
+    def close(self):
+        self.parent.mvshow.set_state(Show_States.STOPPED)
+        super().close()
 
     def eventFilter(self, source, event):
         if source is self and event.type() in (
@@ -1488,8 +1551,17 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
                         duration = self.parent.spinBox_defaultDelay.value() if scene.duration == -1 else scene.duration
                     self.progress_animation.setDuration(duration)
                     self.progress_animation.start()
-                    self.mv.scene_fade_in_anim.start()
-                    self.scene_timer.singleShot(duration, self.scene_runner)
+
+                    try:
+                        self.scene_timer.disconnect()
+                    except TypeError:
+                        pass
+                    self.scene_timer.stop()
+                    self.scene_timer.timeout.connect(self.scene_runner)
+                    self.scene_timer.setSingleShot(True)
+                    self.scene_timer.start(duration)
+                    # self.scene_timer.singleShot(duration, self.scene_runner)
+                    QtCore.qDebug(f"Running scene {self.current_scene} for {timeStringFromMsec(duration)}")
         else:
             self.progress_animation.stop()
             self.scene_timer.stop()
@@ -1575,12 +1647,12 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
                 self.audio_fade_out_anim.setDuration(500)
                 self.audio_fade_out_anim.setStartValue(self.mv.musicAudioOutput.volume())
-                self.audio_fade_out_anim.setEndValue(self.mv.musicAudioOutput.volume() / 8)
+                self.audio_fade_out_anim.setEndValue(self.audio_volume / 8)
                 self.audio_fade_out_anim.start()
             else:
                 self.audio_fade_in_anim.setDuration(500)
                 self.audio_fade_in_anim.setStartValue(self.mv.musicAudioOutput.volume())
-                self.audio_fade_in_anim.setEndValue(self.mv.musicAudioOutput.volume() * 8)
+                self.audio_fade_in_anim.setEndValue(self.audio_volume)
                 self.audio_fade_in_anim.start()
         elif action == "fade_in":
             if self.pushButton_audio_mute.isChecked():
@@ -1602,20 +1674,36 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             self.audio_fade_out_anim.start()
         elif action == "volume":
             # self.audio_volume = math.log(self.dial_volume.value(), 100)
-            self.mv.musicAudioOutput.setVolume(self.dial_volume.value() / 100)
+            self.audio_volume = self.dial_volume.value() / 100
+            self.mv.musicAudioOutput.setVolume(self.audio_volume)
+        elif action == "stop":
+            try:
+                self.audio_fade_out_anim.finished.disconnect()
+            except TypeError:
+                pass
+            self.mv.audioPlayer.stop()
+            self.mv.audioPlayer.setSource(QtCore.QUrl())
 
 
     def startShow(self):
         state = self.parent.mvshow.state()
+        try:
+            self.mv.scene_fade_out_anim.finished.disconnect()
+        except TypeError:
+            pass
         self.mv.scene_fade_out_anim.finished.connect(lambda: self.changeScene("next"))
+
         if state in [Show_States.STOPPED, Show_States.FINISHED]:
             if len(self.parent.screens) > 1:
-                qr = self.parent.screens[0].geometry()
+                QtCore.qDebug("There is more than one screen. Moving show window to next screen.")
+                qr = self.parent.screens[1].geometry()
+                for screen in self.parent.screens:
+                    print(screen.geometry())
+                print(f"{qr.left()}, {qr.top()}")
                 self.mv.move(qr.left(), qr.top())
-                self.mv.showFullScreen()
+                # self.mv.showFullScreen()
             self.mv.show()
             self.parent.mvshow.set_state(Show_States.RUNNING)
-            self.changeScene("first")
         elif state == Show_States.PAUSED:
             self.parent.mvshow.set_state(Show_States.RUNNING)
 
@@ -1654,6 +1742,8 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
         self.videoPlayer.setAudioOutput(self.videoAudioOutput)
         self.videoWidget.setGeometry(self.label_image.geometry())
         self.videoWidget.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        # TODO: Use QGraphicsScene, videoitem (QGraphicsVideoItem) instead to allow for opacity effect:
+        # https://forum.qt.io/topic/73384/video-to-image-transitions/2
 
         self.audioPlayer.setAudioOutput(self.musicAudioOutput)
         self.audioPlayer.setLoops(QtMultimedia.QMediaPlayer.Loops.Infinite)
@@ -1662,15 +1752,24 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
 
         self.scene_fade_in_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
         self.scene_fade_in_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
-        self.scene_fade_in_anim.setDuration(1000)
+        self.scene_fade_in_anim.setDuration(self.parent.parent.spinBox_transitionTime.value())
         self.scene_fade_in_anim.setStartValue(0)
         self.scene_fade_in_anim.setEndValue(1)
 
         self.scene_fade_out_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
         self.scene_fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
-        self.scene_fade_out_anim.setDuration(500)
+        self.scene_fade_out_anim.setDuration(self.parent.parent.spinBox_transitionTime.value() // 4)
         self.scene_fade_out_anim.setStartValue(1)
         self.scene_fade_out_anim.setEndValue(0)
+
+        self.in_point_connection = QtCore.pyqtBoundSignal()
+        self.out_point_connection = QtCore.pyqtBoundSignal()
+
+
+    def close(self):
+        self.videoPlayer.stop()
+        self.audioPlayer.stop()
+        super().close()
 
     def eventFilter(self, source, event):
         if source is self and event.type() in (
@@ -1701,9 +1800,9 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.videoPlayer.setSource(QtCore.QUrl())
             self.videoWidget.hide()
             self.label_image.setPixmap(scalePixmapToWidget(
-                    self.label_image,
-                    pixmap,
-                    QtCore.Qt.TransformationMode.SmoothTransformation))
+                self.label_image,
+                pixmap,
+                QtCore.Qt.TransformationMode.SmoothTransformation))
             self.label_image.setGraphicsEffect(self.opacityEffect)
             self.label_image.show()
             self.label_image.raise_()
@@ -1711,15 +1810,30 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.label_image.hide()
             # TODO: Check if MIME Type of scene.source is supported and the file exists
             self.videoPlayer.setSource(QtCore.QUrl.fromLocalFile(scene.source))
+
+            try:
+                self.videoPlayer.playbackStateChanged.disconnect(self.in_point_connection)
+                self.videoPlayer.positionChanged.disconnect(self.out_point_connection)
+            except TypeError:
+                pass
+
             if scene.in_point > 0:
-                self.videoPlayer.playbackStateChanged.connect(lambda x: self.manageInPoint(scene.in_point))
+                self.in_point_connection = self.videoPlayer.playbackStateChanged.connect(
+                    lambda x: self.manageInPoint(scene.in_point))
             if scene.out_point > 0:
-                self.videoPlayer.positionChanged.connect((lambda x: self.manageOutPoint(scene.out_point)))
+                self.out_point_connection = self.videoPlayer.positionChanged.connect(
+                    lambda x: self.manageOutPoint(scene.out_point))
+
+            if scene.play_video_audio:
+                self.parent.pushButton_audio_quiet.click()
+
             self.videoPlayer.play()
             self.parent.parent.mvshow.state_changed.connect(self.manageVideoPlayback)
             self.videoWidget.setGraphicsEffect(self.opacityEffect)
             self.videoWidget.show()
             self.videoWidget.raise_()
+
+        self.scene_fade_in_anim.start()
 
         if scene.audio_source:
             # TODO: Check if MIME Type of scene.audio_source is supported and the file exists
@@ -1730,15 +1844,11 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                 self.audioPlayer.setSource(audio_url)
                 self.audioPlayer.play()
         else:
-            self.audioPlayer.stop()
-            self.audioPlayer.setSource(QtCore.QUrl())
+            self.parent.controlAudio("stop")
 
     def manageInPoint(self, pos):
         if self.videoPlayer.isSeekable() and self.videoPlayer.isPlaying():
-            try:
-                self.videoPlayer.positionChanged.disconnect()
-            except TypeError:
-                pass
+            QtCore.qDebug(f"Setting video in point to {pos}")
             self.videoPlayer.setPosition(pos)
 
     def manageOutPoint(self, pos):
@@ -1747,6 +1857,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                 self.videoPlayer.playbackStateChanged.disconnect()
             except TypeError:
                 pass
+            QtCore.qDebug(f"Video out point reached at {pos}")
             self.videoPlayer.stop()
 
     def manageVideoPlayback(self):
@@ -1754,7 +1865,6 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.videoPlayer.pause()
         elif self.parent.parent.mvshow.state() == Show_States.RUNNING:
             self.videoPlayer.play()
-
 
 
 if __name__ == "__main__":
