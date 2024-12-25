@@ -83,6 +83,7 @@ class Mv_Project(QtCore.QObject):
         super().__init__()
         self.show = Mv_Show()
         self.bin = ProjectBinModel()
+        self.settings = ProjectSettings()
 
     def clear_bin(self):
         self.bin.clear()
@@ -137,8 +138,8 @@ class Mv_Show(QtCore.QObject):
     def fromJson(self, json_string: dict, progress_callback):
         self.sequence.clear()
         self.set_state(Show_States.STOPPED)
-        num_scenes = len(json_string["scenes"])
-        for i, s in enumerate(json_string["scenes"]):
+        num_scenes = len(json_string)
+        for i, s in enumerate(json_string):
             progress_callback.emit((i + 1) // num_scenes * 100)
             scene = Mv_Scene.fromJson(s)
             self.sequence.appendRow(scene)
@@ -867,6 +868,42 @@ class BinItem(QtGui.QStandardItem):
         super().__init__()
 
 
+class ProjectSettings(QtCore.QObject):
+    valueChanged = QtCore.pyqtSignal(str, QtCore.QVariant, name="valueChanged")
+
+    def __init__(self):
+        self.__settings = {}
+
+        super().__init__()
+
+    def toJson(self) -> {str}:
+        print(json.dumps(self.__settings))
+        return {"settings": json.dumps(self.__settings)}
+
+    def fromJson(self, json_string: {str}):
+        for setting, value in json.loads(json_string).items():
+            self.setProperty(setting, value)
+
+    def getProperty(self, property_name: str):
+        try:
+            return self.__settings[property_name]
+        except KeyError:
+            return None
+
+    def setProperty(self, property_name: str, value: QtCore.QVariant) -> bool:
+        old_value = self.getProperty(property_name)
+        if old_value == value:
+            return False
+        try:
+            self.__settings[property_name] = value
+        except (TypeError, ValueError):
+            return False
+        else:
+            QtCore.qDebug(f'Setting "{property_name}" from "{old_value}" to "{value}"')
+            self.valueChanged.emit(property_name, value)
+            return True
+
+
 def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
     if scene:
         #if type(scene.pixmap) is QtGui.QPixmap:
@@ -1015,6 +1052,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
         self.mvshow.sequence.layoutChanged.connect(self.changed)
         self.mvshow.sequence.rowsInserted.connect(self.changed)
         self.mvshow.sequence.rowsRemoved.connect(self.changed)
+        self.project.settings.valueChanged.connect(self.changed)
         self.mvshow.sequence.rowsRemoved.connect(self.showScenePreview)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.syncSelection)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.showScenePreview)
@@ -1027,6 +1065,11 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
         self.actionSave.triggered.connect(self.saveToFile)
         self.actionSave_As.triggered.connect(self.saveAsFileDialog)
         self.actionQuit.triggered.connect(self.quitProject, QtCore.Qt.ConnectionType.QueuedConnection)
+
+        self.spinBox_transitionTime.valueChanged.connect(
+            lambda x: self.project.settings.setProperty("transition_time", x))
+        self.spinBox_defaultDelay.valueChanged.connect(
+            lambda x: self.project.settings.setProperty("default_delay", x))
 
         self.FilmStripDelegate = FilmStripItemDelegate()
         # self.listView_filmStrip.setItemDelegate(self.FilmStripDelegate)
@@ -1133,8 +1176,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             answer = self.saveChangesDialog()
 
             if answer == QtWidgets.QMessageBox.StandardButton.Save:
-                if self.saveToFile():
-                    self.loadFromFile(file_name)
+                self.saveToFile()
             elif answer == QtWidgets.QMessageBox.StandardButton.Discard:
                 self.changes_saved = True
                 self.radioButton_changes.setChecked(False)
@@ -1160,7 +1202,9 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
     def saveProjectToFile(self, file_name, progress_callback):
         with gzip.open(self.save_file, 'wt', encoding='ascii') as f:
-            json.dump(self.mvshow.toJson(progress_callback), f)
+            settings = self.project.settings.toJson()
+            show = self.mvshow.toJson(progress_callback)
+            json.dump(settings | show, f)
 
     def loadProjectFromFile(self, file_name, progress_callback):
         try:
@@ -1170,8 +1214,20 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             with open(file_name, 'r') as f:
                 json_string = json.load(f)
 
-        self.mvshow.fromJson(json_string, progress_callback)
+        if "settings" in json_string:
+            QtCore.qDebug(f"Loading project settings {json_string["settings"]}")
+            self.project.settings.fromJson(json_string["settings"])
+            if self.project.settings.getProperty("default_delay"):
+                self.spinBox_defaultDelay.setValue(self.project.settings.getProperty("default_delay"))
+            if self.project.settings.getProperty("transition_time"):
+                self.spinBox_transitionTime.setValue(self.project.settings.getProperty("transition_time"))
+        if "scenes" in json_string:
+            QtCore.qDebug(f"Loading {len(json_string["scenes"])} scenes")
+            self.mvshow.fromJson(json_string["scenes"], progress_callback)
+
         self.save_file = file_name
+        self.changes_saved = True
+        self.radioButton_changes.setChecked(False)
 
     def sceneFromDirectoryDialog(self):
         dir_name = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Media Source Directory")
@@ -1443,7 +1499,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
     def updateSceneNotes(self):
         scene = self.mvshow.sequence.item(self.scene_index)
         if scene:
-            #scene_data = scene.data(QtCore.Qt.ItemDataRole.UserRole)
             scene_data = scene
             scene_data.notes = self.textEdit_notes.toPlainText()
 
@@ -1540,15 +1595,17 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
     def scene_runner(self, scene_index=None):
         if self.parent.mvshow.state() == Show_States.RUNNING:
             if scene_index is None:
-                QtCore.qDebug(f"Fading out scene {self.current_scene}")
                 self.mv.scene_fade_out_anim.start()
+                QtCore.qDebug(f"Fading out scene {self.current_scene}")
             else:
                 scene = self.parent.mvshow.getScene(scene_index)
                 if scene.duration > 0 or scene.duration == -1:
-                    if scene.in_point >= 0 and scene.out_point >= 0:
+                    if 0 <= scene.in_point < scene.out_point:
                         duration = scene.out_point - scene.in_point
+                    elif scene.duration == -1:
+                        duration = self.parent.project.settings.getProperty("default_delay")
                     else:
-                        duration = self.parent.spinBox_defaultDelay.value() if scene.duration == -1 else scene.duration
+                        duration = scene.duration
                     self.progress_animation.setDuration(duration)
                     self.progress_animation.start()
 
@@ -1560,7 +1617,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
                     self.scene_timer.timeout.connect(self.scene_runner)
                     self.scene_timer.setSingleShot(True)
                     self.scene_timer.start(duration)
-                    # self.scene_timer.singleShot(duration, self.scene_runner)
+
                     QtCore.qDebug(f"Running scene {self.current_scene} for {timeStringFromMsec(duration)}")
         else:
             self.progress_animation.stop()
@@ -1752,18 +1809,19 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
 
         self.scene_fade_in_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
         self.scene_fade_in_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
-        self.scene_fade_in_anim.setDuration(self.parent.parent.spinBox_transitionTime.value())
+        self.scene_fade_in_anim.setDuration(self.parent.parent.project.settings.getProperty("transition_time"))
         self.scene_fade_in_anim.setStartValue(0)
         self.scene_fade_in_anim.setEndValue(1)
 
         self.scene_fade_out_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
         self.scene_fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
-        self.scene_fade_out_anim.setDuration(self.parent.parent.spinBox_transitionTime.value() // 4)
+        self.scene_fade_out_anim.setDuration(self.parent.parent.project.settings.getProperty("transition_time") // 4)
         self.scene_fade_out_anim.setStartValue(1)
         self.scene_fade_out_anim.setEndValue(0)
 
-        self.in_point_connection = QtCore.pyqtBoundSignal()
-        self.out_point_connection = QtCore.pyqtBoundSignal()
+        # Declare to store and disconnect the signal-slot-connections for in point and out point of videos
+        self.in_point_connection = None
+        self.out_point_connection = None
 
 
     def close(self):
@@ -1811,11 +1869,17 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             # TODO: Check if MIME Type of scene.source is supported and the file exists
             self.videoPlayer.setSource(QtCore.QUrl.fromLocalFile(scene.source))
 
-            try:
-                self.videoPlayer.playbackStateChanged.disconnect(self.in_point_connection)
-                self.videoPlayer.positionChanged.disconnect(self.out_point_connection)
-            except TypeError:
-                pass
+            if self.in_point_connection:
+                try:
+                    self.videoPlayer.playbackStateChanged.disconnect(self.in_point_connection)
+                except TypeError:
+                    pass
+
+            if self.out_point_connection:
+                try:
+                    self.videoPlayer.positionChanged.disconnect(self.out_point_connection)
+                except TypeError:
+                    pass
 
             if scene.in_point > 0:
                 self.in_point_connection = self.videoPlayer.playbackStateChanged.connect(
@@ -1824,7 +1888,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                 self.out_point_connection = self.videoPlayer.positionChanged.connect(
                     lambda x: self.manageOutPoint(scene.out_point))
 
-            if scene.play_video_audio:
+            if scene.play_video_audio and not self.parent.pushButton_audio_quiet.isChecked():
                 self.parent.pushButton_audio_quiet.click()
 
             self.videoPlayer.play()
