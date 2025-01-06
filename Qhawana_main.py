@@ -14,7 +14,7 @@ import traceback
 from enum import IntEnum
 
 from PyQt6 import QtCore, QtGui, QtMultimedia, QtWidgets, QtMultimediaWidgets
-from ui_mainWindow import Ui_mainWindow_pyMultiVision
+from ui_mainWindow import Ui_mainWindow_Qhawana
 from ui_presenterView import Ui_Form_presenterView
 from ui_multiVisionShow import Ui_Form_multiVisionShow
 
@@ -349,9 +349,9 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
     def mimeTypes(self):
         types = super().mimeTypes()
-        types.append("x-application-pyMultiVision-STILLS")
-        types.append("x-application-pyMultiVision-AUDIO")
-        types.append("x-application-pyMultiVision-VIDEO")
+        types.append("x-application-Qhawana-STILLS")
+        types.append("x-application-Qhawana-AUDIO")
+        types.append("x-application-Qhawana-VIDEO")
 
         return types
 
@@ -403,14 +403,14 @@ class Mv_sequence(QtCore.QAbstractTableModel):
                 self.setData(self.index(row, column, parent), item_uuid, QtCore.Qt.ItemDataRole.UserRole)
             return True
 
-        elif data.hasFormat('x-application-pyMultiVision-STILLS'):
-            QtCore.qDebug("x-application-pyMultiVision-STILLS")
+        elif data.hasFormat('x-application-Qhawana-STILLS'):
+            QtCore.qDebug("x-application-Qhawana-STILLS")
 
             return True
-        elif data.hasFormat('x-application-pyMultiVision-AUDIO'):
-            QtCore.qDebug("x-application-pyMultiVision-AUDIO")
+        elif data.hasFormat('x-application-Qhawana-AUDIO'):
+            QtCore.qDebug("x-application-Qhawana-AUDIO")
 
-            encoded = data.data("x-application-pyMultiVision-AUDIO")
+            encoded = data.data("x-application-Qhawana-AUDIO")
             stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.ReadOnly)
 
             item = stream.readQString()
@@ -715,9 +715,9 @@ class SceneTableWidget(QtWidgets.QTableView):
         else:
             formats = e.mimeData().formats()
             QtCore.qDebug(f"Entered external drag from {e.source()} with MIME {e.mimeData().formats()}")
-            if ("x-application-pyMultiVision-STILLS" in formats or
-                    "x-application-pyMultiVision-VIDEO" in formats or
-                    "x-application-pyMultiVision-AUDIO" in formats):
+            if ("x-application-Qhawana-STILLS" in formats or
+                    "x-application-Qhawana-VIDEO" in formats or
+                    "x-application-Qhawana-AUDIO" in formats):
                 e.accept()
 
     def dragMoveEvent(self, e):
@@ -729,8 +729,8 @@ class SceneTableWidget(QtWidgets.QTableView):
             self.setDragDropOverwriteMode(False)
 
             formats = e.mimeData().formats()
-            if ("x-application-pyMultiVision-STILLS" in formats or "x-application-pyMultiVision-VIDEO" in formats and
-                index.column() == 0) or ("x-application-pyMultiVision-AUDIO" in formats and index.column() == 1):
+            if ("x-application-Qhawana-STILLS" in formats or "x-application-Qhawana-VIDEO" in formats and
+                index.column() == 0) or ("x-application-Qhawana-AUDIO" in formats and index.column() == 1):
                 self.setDropIndicatorShown(True)
                 e.accept()
             else:
@@ -797,11 +797,11 @@ class ProjectBinWidget(QtWidgets.QTreeView):
                 if parent_index.model() is not None:
                     parent_item = parent_index.model().itemData(parent_index)
                     if parent_item[0] == "STILLS":
-                        mime.setData("x-application-pyMultiVision-STILLS", b"")
+                        mime.setData("x-application-Qhawana-STILLS", b"")
                     elif parent_item[0] == "VIDEO":
-                        mime.setData("x-application-pyMultiVision-VIDEO", b"")
+                        mime.setData("x-application-Qhawana-VIDEO", b"")
                     elif parent_item[0] == "AUDIO":
-                        mime.setData("x-application-pyMultiVision-AUDIO",
+                        mime.setData("x-application-Qhawana-AUDIO",
                                      bytes(selected_index.model().data(selected_index).encode("utf-8")))
                     drag.setMimeData(mime)
                     icon = selected_index.model().data(selected_index, QtCore.Qt.ItemDataRole.DecorationRole)
@@ -827,8 +827,8 @@ class ProjectBinModel(QtGui.QStandardItemModel):
         return QtCore.Qt.DropAction.CopyAction | QtCore.Qt.DropAction.LinkAction
 
     def mimeTypes(self):
-        types = ["x-application-pyMultiVision-STILLS", "x-application-pyMultiVision-AUDIO",
-                 "x-application-pyMultiVision-VIDEO"]
+        types = ["x-application-Qhawana-STILLS", "x-application-Qhawana-AUDIO",
+                 "x-application-Qhawana-VIDEO"]
 
         return types
 
@@ -845,11 +845,11 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                 if parent_index.model() is not None:
                     parent_item = parent_index.model().itemData(parent_index)[0]
                     if parent_item == "STILLS":
-                        format_type = "x-application-pyMultiVision-STILLS"
+                        format_type = "x-application-Qhawana-STILLS"
                     elif parent_item == "VIDEO":
-                        format_type = "x-application-pyMultiVision-VIDEO"
+                        format_type = "x-application-Qhawana-VIDEO"
                     elif parent_item == "AUDIO":
-                        format_type = "x-application-pyMultiVision-AUDIO"
+                        format_type = "x-application-Qhawana-AUDIO"
 
                 encoded = QtCore.QByteArray()
                 stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.WriteOnly)
@@ -1045,7 +1045,7 @@ def timeStringFromMsec(msec: int):
     return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
 
-class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
+class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def __init__(self):
         QtWidgets.QMainWindow.__init__(self)
         self.setupUi(self)

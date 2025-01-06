@@ -4,14 +4,14 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="918d5eaf-1604-4810-bf2a-e1c08669ff87" name="Changes" comment="MVP with ability to load scene images/videos from folder, save/load a project and play+control audio (audio path still static in code).">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="918d5eaf-1604-4810-bf2a-e1c08669ff87" name="Changes" comment="Switched to QGraphicsView for the show">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/pyMultiVision.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/pyMultiVision.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyMultiVision_main.py" beforeDir="false" afterPath="$PROJECT_DIR$/pyMultiVision_main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyMultiVision_main.py" beforeDir="false" afterPath="$PROJECT_DIR$/Qhawana_main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui_mainWindow.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui_mainWindow.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui_mainWindow.ui" beforeDir="false" afterPath="$PROJECT_DIR$/ui_mainWindow.ui" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui_multiVisionShow.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui_multiVisionShow.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui_multiVisionShow.ui" beforeDir="false" afterPath="$PROJECT_DIR$/ui_multiVisionShow.ui" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -21,6 +21,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "hephestos"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/hephestos/qhawana/",
+    "accountId": "68773205-6599-437b-af87-114a3af6fbde"
+  }
+}]]></component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 3
 }</component>
@@ -32,17 +44,21 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "Python.Qhawana_main.executor": "Run",
     "Python.contextlib.executor": "Run",
     "Python.pyMultiVision.executor": "Run",
     "Python.pyMultiVision_main.executor": "Run",
     "Python.qtableview-reorder-working-dennis.executor": "Run",
+    "Python.scratch.executor": "Run",
+    "Python.scratch_1.executor": "Run",
     "Python.ui_mainWindow.executor": "Run",
     "Python.ui_multiVisionShow.executor": "Run",
     "Python.ui_presenterView.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master",
-    "last_opened_file_path": "/home/scout/Code/qtableview-reorder-working-dennis.py",
-    "settings.editor.selected.configurable": "preferences.externalTools"
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "dev",
+    "last_opened_file_path": "/home/scout/Documents/Code/pyMultiVision",
+    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
   },
   "keyToStringList": {
     "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
@@ -56,7 +72,7 @@
     </key>
   </component>
   <component name="RunManager">
-    <configuration name="pyMultiVision_main" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="Qhawana_main" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true" show_console_on_std_err="true">
       <module name="pyMultiVision" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -69,7 +85,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/pyMultiVision_main.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/Qhawana_main.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -80,7 +96,7 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Python.pyMultiVision_main" />
+        <item itemvalue="Python.Qhawana_main" />
       </list>
     </recent_temporary>
   </component>
@@ -101,7 +117,71 @@
       <option name="project" value="LOCAL" />
       <updated>1723554956896</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Added reordering of scenes via drag and drop and fade in/out animations when changing scenes.">
+      <option name="closed" value="true" />
+      <created>1723666182665</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1723666182665</updated>
+    </task>
+    <task id="LOCAL-00003" summary="Added proper handling of mixed STILL/VIDEO shows and ability to set in and out points for videos in the main window. Countless bugfixes.">
+      <option name="closed" value="true" />
+      <created>1734861961826</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1734861961826</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Added progress display for save operations.">
+      <option name="closed" value="true" />
+      <created>1734863907479</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1734863907479</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Added display of scene notes in presenter view.">
+      <option name="closed" value="true" />
+      <created>1734866229581</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1734866229581</updated>
+    </task>
+    <task id="LOCAL-00006" summary="Separated audio outputs for video scenes and background music.">
+      <option name="closed" value="true" />
+      <created>1734867262351</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1734867262351</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Fixed bugs with erroneous scene timer behavior and wrong signals for video out point management.">
+      <option name="closed" value="true" />
+      <created>1735035969643</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1735035969643</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Added saving and loading of project settings">
+      <option name="closed" value="true" />
+      <created>1735142364188</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1735142364188</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Switched to QGraphicsView for the show">
+      <option name="closed" value="true" />
+      <created>1736180491866</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1736180491866</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -117,6 +197,33 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="MVP with ability to load scene images/videos from folder, save/load a project and play+control audio (audio path still static in code)." />
-    <option name="LAST_COMMIT_MESSAGE" value="MVP with ability to load scene images/videos from folder, save/load a project and play+control audio (audio path still static in code)." />
+    <MESSAGE value="Added reordering of scenes via drag and drop and fade in/out animations when changing scenes." />
+    <MESSAGE value="Added proper handling of mixed STILL/VIDEO shows and ability to set in and out points for videos in the main window. Countless bugfixes." />
+    <MESSAGE value="Added progress display for save operations." />
+    <MESSAGE value="Added display of scene notes in presenter view." />
+    <MESSAGE value="Separated audio outputs for video scenes and background music." />
+    <MESSAGE value="Fixed bugs with erroneous scene timer behavior and wrong signals for video out point management." />
+    <MESSAGE value="Added saving and loading of project settings" />
+    <MESSAGE value="Switched to QGraphicsView for the show" />
+    <option name="LAST_COMMIT_MESSAGE" value="Switched to QGraphicsView for the show" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint suspend="THREAD" type="python-line">
+          <url>file://$USER_HOME$/Nextcloud/Documents (2)/Code/pyMultiVision/pyMultiVision_main.py</url>
+          <line>709</line>
+          <option name="timeStamp" value="3" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
+    <watches-manager>
+      <configuration name="PythonConfigurationType">
+        <watch expression="item.data()" language="Python" />
+        <watch expression="item.data(QtCore.Qt.ItemDataRole.UserRole)" />
+        <watch expression="decoded[0]" language="Python" />
+        <watch expression="encoded" />
+      </configuration>
+    </watches-manager>
   </component>
 </project>
