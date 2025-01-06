@@ -1,6 +1,4 @@
-# import math
 import PyQt6.QtCore
-import base64
 import exiftool
 import av
 import gzip
@@ -13,15 +11,14 @@ import mimetypes
 import qtmodern.styles
 import sys
 import traceback
-import uuid
 from enum import IntEnum
 
-from PyQt6 import QtCore, QtGui, QtMultimedia, QtWidgets
+from PyQt6 import QtCore, QtGui, QtMultimedia, QtWidgets, QtMultimediaWidgets
 from ui_mainWindow import Ui_mainWindow_pyMultiVision
 from ui_presenterView import Ui_Form_presenterView
 from ui_multiVisionShow import Ui_Form_multiVisionShow
 
-MV_ICON_SIZE = 50
+MV_ICON_SIZE = 100
 MV_PREVIEW_SIZE = 800
 BUF_SIZE = 65536
 
@@ -94,6 +91,7 @@ class Mv_Project(QtCore.QObject):
             item.setDropEnabled(True)
             root.appendRow(item)
         self.bin.setHorizontalHeaderLabels(["File", "Details"])
+
         return self.bin
 
 
@@ -127,11 +125,11 @@ class Mv_Show(QtCore.QObject):
     def toJson(self, progress_callback):
         scenes = []
         num_scenes = self.sequence.rowCount()
-        for index in range(num_scenes):
-            item = self.sequence.item(index)
+        for i in range(num_scenes):
+            item = self.sequence.item(i)
             scene_data = item.toJson(store_pixmap=True)
             scenes.append(scene_data)
-            progress_callback.emit((index + 1) // num_scenes * 100)
+            progress_callback.emit((i + 1) // num_scenes * 100)
         json_string = {"scenes": scenes}
         return json_string
 
@@ -184,7 +182,6 @@ class Mv_sequence(QtCore.QAbstractTableModel):
             QtCore.qWarning(f"Scene for item in sequence with UUID {item_uuid} is empty")
             return False
         if role == QtCore.Qt.ItemDataRole.UserRole:
-            print("UserRole data requested")
             return item_data
         elif index.column() == 0:
             if role == QtCore.Qt.ItemDataRole.DisplayRole:
@@ -337,7 +334,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
     def insertRows(self, row, count, parent=...):
         self.beginInsertRows(parent, row, row + count - 1)
         for r in range(count):
-            print(f"inserting row after {row}")
+            QtCore.qInfo(f"inserting row after {row}")
             self._sequence.insert(row, QtGui.QStandardItem())
         self.endInsertRows()
         return True
@@ -345,7 +342,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
     def removeRows(self, row, count, parent=...):
         self.beginRemoveRows(parent, row, row + count - 1)
         for r in range(count):
-            print(f"deleting row {row}")
+            QtCore.qInfo(f"deleting row {row}")
             del self._sequence[row]
         self.endRemoveRows()
         return True
@@ -449,7 +446,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
         self._sequence.sort(key=lambda x: self.dataFromItemAndColumn(x, column), reverse=rev)
         self.endResetModel()
 
-    def dataFromItemAndColumn(self, sort_item: QtGui.QStandardItem, column: int):
+    def dataFromItemAndColumn(self, sort_item: QtGui.QStandardItem, column: int) -> str:
         item_uuid = sort_item.data(QtCore.Qt.ItemDataRole.UserRole)
 
         scene: Mv_Scene = self._scenes[item_uuid]
@@ -462,10 +459,11 @@ class Mv_sequence(QtCore.QAbstractTableModel):
                 elif "QuickTime:CreateDate" in scene.exif:
                     return scene.exif["QuickTime:CreateDate"]
 
-        return False
+        QtCore.qDebug(f"No sort key available for column {column} of scene {item_uuid}")
+        return "0"
 
     def inheritAudio(self, selection: list[QtCore.QModelIndex]):
-        print(f"Received {selection} of {len(selection)} rows")
+        QtCore.qDebug(f"Received {selection} of {len(selection)} rows")
         selection.sort(key=lambda x: x.row())
         audio_source = self.item(selection[0].row()).audio_source
         if audio_source:
@@ -533,7 +531,6 @@ class Mv_Scene(QtGui.QStandardItem):
         super().__init__()
 
     def __getstate__(self):
-        print(f"Serializing scene {self.source}")
         state = [self.uuid, self.source, self.audio_source, self.scene_type,
                  self.pause, self.duration, self.notes, self.exif]
         byte_array = QtCore.QByteArray()
@@ -741,7 +738,7 @@ class SceneTableWidget(QtWidgets.QTableView):
                 e.ignore()
 
 
-class SceneTableTextOnlyDelegate(QtWidgets.QStyledItemDelegate):
+class SceneTableTextOnlyDelegateCanBeRemoved(QtWidgets.QStyledItemDelegate):
     def sizeHint(self, option, index):
         return QtCore.QSize(50, 12)
 
@@ -843,7 +840,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                 mime_data = QtCore.QMimeData()
                 format_type = types[0]
 
-                item = index.model().itemData(index)[0]
+                item = index.model().itemData(index)[QtCore.Qt.ItemDataRole.UserRole]
                 parent_index = index.parent()
                 if parent_index.model() is not None:
                     parent_item = parent_index.model().itemData(parent_index)[0]
@@ -862,6 +859,68 @@ class ProjectBinModel(QtGui.QStandardItemModel):
 
                 return mime_data
 
+    def toJson(self, progress_callback):
+        items = {}
+
+        for index, data in forEach(self):
+            items[data] = []
+            if index:
+                for i, d in forEach(self, index):
+                    items[data].append(d)
+
+        json_string = {"project_bin": items}
+        return json_string
+
+    def fromJson(self, json_string: dict):
+        root = self.invisibleRootItem()
+
+        self.beginResetModel()
+        self.removeRows(0, self.rowCount())
+
+        for key, value in json_string.items():
+            category_item = QtGui.QStandardItem(key)
+            root.appendRow(category_item)
+
+            for v in value:
+                file = os.path.basename(v)
+                bin_item = QtGui.QStandardItem(file)
+                pixmap = None
+
+                if key == "AUDIO":
+                    pixmap = QtGui.QPixmap(MV_ICON_SIZE, MV_ICON_SIZE)
+                    pixmap.fill(QtGui.QColor("black"))
+                elif key == "STILLS":
+                    pixmap = QtGui.QPixmap(v).scaled(MV_ICON_SIZE, MV_ICON_SIZE,
+                                                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                                     QtCore.Qt.TransformationMode.FastTransformation)
+                elif key == "VIDEO":
+                    keyframe_image = getKeyframeFromVideo(v)
+                    pixmap = (QtGui.QPixmap().fromImage(keyframe_image).
+                              scaled(MV_ICON_SIZE, MV_ICON_SIZE,
+                                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                     QtCore.Qt.TransformationMode.FastTransformation))
+
+                if pixmap:
+                    tooltip_image = jsonValFromPixmap(pixmap)
+                    html = f'<img src="data:image/png;base64,{tooltip_image}">'
+                    bin_item.setData(html, QtCore.Qt.ItemDataRole.ToolTipRole)
+
+                bin_item.setData(v, QtCore.Qt.ItemDataRole.UserRole)
+                category_item.appendRow(bin_item)
+
+        self.endResetModel()
+
+
+def forEach(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):
+    for r in range(0, model.rowCount(parent)):
+        index = model.index(r, 0, parent)
+        data = model.data(index, QtCore.Qt.ItemDataRole.UserRole)
+
+        if model.hasChildren(index):
+            yield index, data
+        else:
+            yield None, data
+
 
 class BinItem(QtGui.QStandardItem):
     def __init__(self, *__args):
@@ -872,12 +931,10 @@ class ProjectSettings(QtCore.QObject):
     valueChanged = QtCore.pyqtSignal(str, QtCore.QVariant, name="valueChanged")
 
     def __init__(self):
-        self.__settings = {}
-
+        self.__settings = {"transition_time": 1000, "default_delay": 5000}
         super().__init__()
 
     def toJson(self) -> {str}:
-        print(json.dumps(self.__settings))
         return {"settings": json.dumps(self.__settings)}
 
     def fromJson(self, json_string: {str}):
@@ -906,17 +963,17 @@ class ProjectSettings(QtCore.QObject):
 
 def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
     if scene:
-        #if type(scene.pixmap) is QtGui.QPixmap:
-        #    pixmap = scene.pixmap
-        #else:
-        if scene.scene_type == Scene_Type.STILL:
-            pixmap = QtGui.QPixmap(scene.source)
-        elif scene.scene_type == Scene_Type.VIDEO:
-            image = getKeyframeFromVideo(scene.source)
-            pixmap = QtGui.QPixmap().fromImage(image)
+        if type(scene.pixmap) is QtGui.QPixmap:
+            pixmap = scene.pixmap
         else:
-            pixmap = QtGui.QPixmap(100, 100)
-            pixmap.fill(QtGui.QColor("black"))
+            if scene.scene_type == Scene_Type.STILL:
+                pixmap = QtGui.QPixmap(scene.source)
+            elif scene.scene_type == Scene_Type.VIDEO:
+                image = getKeyframeFromVideo(scene.source)
+                pixmap = QtGui.QPixmap().fromImage(image)
+            else:
+                pixmap = QtGui.QPixmap(100, 100)
+                pixmap.fill(QtGui.QColor("black"))
     else:
         pixmap = QtGui.QPixmap(100, 100)
         pixmap.fill(QtGui.QColor("black"))
@@ -1007,6 +1064,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
         self.videoPreviewPlayer = QtMultimedia.QMediaPlayer(parent=self)
         self.videoPreviewPlayer.setVideoOutput(self.videoPreviewWidget)
+        self.videoPreviewPlayer.durationChanged.connect(self.horizontalSlider_videoPosition.setMaximum)
         self.pushButton_playPausePreview.clicked.connect(self.playPauseVideoPreview)
         self.pushButton_inPoint.clicked.connect(self.setVideoInPoint)
         self.pushButton_outPoint.clicked.connect(self.setVideoOutPoint)
@@ -1030,9 +1088,9 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
         bin_model = self.project.clear_bin()
         self.treeView.setModel(bin_model)
+        self.treeView.header().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
         self.threadpool = QtCore.QThreadPool().globalInstance()
-        # self.threadpool.setMaxThreadCount(1)
         QtCore.qInfo("Multithreading with maximum %d threads" % self.threadpool.maxThreadCount())
         QtCore.qInfo("Supported media MIME types: %s" % self.supported_mime_types)
 
@@ -1045,7 +1103,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             qr = self.screens[0].geometry()
             self.move(qr.left(), qr.top())
 
-        # self.tableView_scenes.setItemDelegateForColumn(1, SceneTableTextOnlyDelegate())
         self.pushButton_mediaSourceDirectory.clicked.connect(self.sceneFromDirectoryDialog)
         self.pushButton_startShow.clicked.connect(self.openPresenterView)
         self.mvshow.sequence.dataChanged.connect(self.changed)
@@ -1058,6 +1115,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.showScenePreview)
         self.listView_filmStrip.selectionModel().selectionChanged.connect(self.syncSelection)
         self.listView_filmStrip.selectionModel().selectionChanged.connect(self.showScenePreview)
+        self.treeView.selectionModel().selectionChanged.connect(self.showBinPreview)
         self.mvshow.sequence.rowsInserted.connect(self.tableView_scenes.resizeColumnsToContents)
         self.textEdit_notes.textChanged.connect(self.updateSceneNotes)
         self.actionNew.triggered.connect(self.newProject)
@@ -1108,7 +1166,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
                 self.newProject()
             else:
-                # In case the user selected 'Cancel', do nothing:
+                # In case the user selected "Cancel", do nothing:
                 pass
 
     def quitProject(self):
@@ -1203,8 +1261,9 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
     def saveProjectToFile(self, file_name, progress_callback):
         with gzip.open(self.save_file, 'wt', encoding='ascii') as f:
             settings = self.project.settings.toJson()
+            project_bin = self.project.bin.toJson(progress_callback)
             show = self.mvshow.toJson(progress_callback)
-            json.dump(settings | show, f)
+            json.dump(settings | project_bin | show, f)
 
     def loadProjectFromFile(self, file_name, progress_callback):
         try:
@@ -1214,6 +1273,8 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             with open(file_name, 'r') as f:
                 json_string = json.load(f)
 
+        QtCore.qInfo(f"Loading project from file {file_name}")
+
         if "settings" in json_string:
             QtCore.qDebug(f"Loading project settings {json_string["settings"]}")
             self.project.settings.fromJson(json_string["settings"])
@@ -1221,9 +1282,15 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                 self.spinBox_defaultDelay.setValue(self.project.settings.getProperty("default_delay"))
             if self.project.settings.getProperty("transition_time"):
                 self.spinBox_transitionTime.setValue(self.project.settings.getProperty("transition_time"))
+
+        if "project_bin" in json_string:
+            self.project.bin.fromJson(json_string["project_bin"])
+
         if "scenes" in json_string:
             QtCore.qDebug(f"Loading {len(json_string["scenes"])} scenes")
             self.mvshow.fromJson(json_string["scenes"], progress_callback)
+
+        QtCore.qInfo(f"Project loaded from file {file_name}")
 
         self.save_file = file_name
         self.changes_saved = True
@@ -1240,7 +1307,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             worker.signals.progress.connect(self.progressBar.setValue)
             worker.signals.finished.connect(self.resetProgressBar)
             self.threadpool.start(worker)
-            # self.populateModelFromDirectory(dir_name, None)
 
     def populateModelFromDirectory(self, dir_name, progress_callback):
         directory = sorted(os.listdir(dir_name))
@@ -1289,15 +1355,14 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                                  exif=exif_data)
                 QtCore.qDebug(f"Adding image scene from file {path}")
 
-                # print(f"ExifTool: {scene.exif}")
-                # print(f"PIL: {exif_tags}")
-                bin_item = QtGui.QStandardItem(path)
+                bin_item = QtGui.QStandardItem(file)
+                bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
                 bin_item.setDragEnabled(True)
                 bin_item.setDropEnabled(False)
-                if "EXIF:CreateDate" in scene.exif:
-                    bin_item.setData(scene.exif["EXIF:CreateDate"])
+
                 parent = self.project.bin.findItems("STILLS", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
                 parent.appendRow(bin_item)
+
                 QtCore.qDebug(f"Adding image file {path} to project bin")
             elif mimetype.startswith("video/") and mimetype in self.supported_mime_types:
                 keyframe_image = getKeyframeFromVideo(path)
@@ -1330,14 +1395,25 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                 QtCore.qDebug(f"Adding video scene from file {path} with duration {duration} ms, "
                               f"in point {in_point} ms and out point {out_point} ms")
 
-                bin_item = QtGui.QStandardItem(path)
+                bin_item = QtGui.QStandardItem(file)
+                bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
+
+                bin_item.setDragEnabled(True)
+                bin_item.setDropEnabled(False)
+
                 parent = self.project.bin.findItems("VIDEO", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
                 parent.appendRow(bin_item)
+
                 QtCore.qDebug(f"Adding video file {path} to project bin")
             elif mimetype.startswith("audio/"):
-                bin_item = QtGui.QStandardItem(path)
+                bin_item = QtGui.QStandardItem(file)
+                bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
+                bin_item.setDragEnabled(True)
+                bin_item.setDropEnabled(False)
+
                 parent = self.project.bin.findItems("AUDIO", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
                 parent.appendRow(bin_item)
+
                 QtCore.qDebug(f"Adding audio file {path} to project bin")
                 # Audio items will only be added to the project bin, but no scene item will be created, so continue:
                 continue
@@ -1348,8 +1424,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
 
             scene_item = QtGui.QStandardItem(file)
             scene_item.setData(scene)
-            # scene_item.setData(audiopath, QtCore.Qt.ItemDataRole.UserRole + 1)
-            # scene_item.setData(scene.duration, QtCore.Qt.ItemDataRole.UserRole + 2)
             scene_item.setDropEnabled(False)
 
             self.mvshow.sequence.appendRow(scene_item)
@@ -1381,6 +1455,53 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
             dialog.setWindowTitle("Empty MultiVision show!")
             dialog.setText("Please add scenes first.")
             dialog.exec()
+
+
+    def showBinPreview(self, selection):
+        if type(selection) == QtCore.QItemSelection and len(selection.indexes()) > 0:
+            bin_index = selection.indexes()[0]
+        elif type(selection) == QtCore.QModelIndex:
+            bin_index = selection
+        else:
+            return
+
+        if bin_index.isValid():
+            self.horizontalSlider_videoPosition.setValue(0)
+            self.pushButton_playPausePreview.setChecked(False)
+            self.pushButton_inPoint.setEnabled(False)
+            self.pushButton_outPoint.setEnabled(False)
+
+            bin_item = self.project.bin.itemFromIndex(bin_index)
+            parent = bin_item.parent() if bin_item else None
+
+            if parent:
+                parent_type = parent.data(QtCore.Qt.ItemDataRole.DisplayRole)
+                QtCore.qDebug(f"Showing preview for {parent_type} item {bin_index.row()} "
+                              f"({self.project.bin.rowCount(parent.index())} items in bin)")
+
+                if parent_type == "STILLS":
+                    self.stackedWidget_preview.setCurrentIndex(0)
+                    self.pushButton_playPausePreview.setEnabled(False)
+                    self.horizontalSlider_videoPosition.setEnabled(False)
+                    self.videoPreviewPlayer.stop()
+                    self.videoPreviewPlayer.setSource(QtCore.QUrl())
+
+                    self.label_mediaPreview.setPixmap(
+                        scalePixmapToWidget(self.label_mediaPreview,
+                                            QtGui.QPixmap(bin_item.data(QtCore.Qt.ItemDataRole.UserRole))))
+                elif parent_type == "VIDEO":
+                    self.stackedWidget_preview.setCurrentIndex(1)
+                    self.pushButton_playPausePreview.setEnabled(True)
+                    self.horizontalSlider_videoPosition.setEnabled(True)
+
+                    # TODO: Check if MIME Type of scene.source is supported and the file exists
+                    self.videoPreviewPlayer.setSource(
+                        QtCore.QUrl.fromLocalFile(bin_item.data(QtCore.Qt.ItemDataRole.UserRole)))
+                    self.videoPreviewPlayer.play()
+                    self.videoTimer.singleShot(100, self.videoPreviewPlayer.pause)
+        else:
+            QtCore.qDebug("Invalid index, not showing preview")
+
 
     def showScenePreview(self, selection):
         if type(selection) == QtCore.QItemSelection and len(selection.indexes()) > 0:
@@ -1419,7 +1540,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_pyMultiVision):
                     self.pushButton_outPoint.setEnabled(True)
                     self.pushButton_playPausePreview.setEnabled(True)
                     self.horizontalSlider_videoPosition.setEnabled(True)
-                    self.horizontalSlider_videoPosition.setMaximum(scene.duration)
 
                     # TODO: Check if MIME Type of scene.source is supported and the file exists
                     self.videoPreviewPlayer.setSource(QtCore.QUrl.fromLocalFile(scene.source))
@@ -1754,9 +1874,6 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             if len(self.parent.screens) > 1:
                 QtCore.qDebug("There is more than one screen. Moving show window to next screen.")
                 qr = self.parent.screens[1].geometry()
-                for screen in self.parent.screens:
-                    print(screen.geometry())
-                print(f"{qr.left()}, {qr.top()}")
                 self.mv.move(qr.left(), qr.top())
                 # self.mv.showFullScreen()
             self.mv.show()
@@ -1789,21 +1906,17 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
         self.setupUi(self)
         self.parent = parent
         self.installEventFilter(self)
+
         self.videoPlayer = QtMultimedia.QMediaPlayer(parent=self)
         self.audioPlayer = QtMultimedia.QMediaPlayer(parent=self)
         self.videoAudioOutput = QtMultimedia.QAudioOutput(parent=self)
         self.musicAudioOutput = QtMultimedia.QAudioOutput(parent=self)
-        self.supported_mimetypes = get_supported_mime_types()
 
-        self.videoPlayer.setVideoOutput(self.videoWidget)
         self.videoPlayer.setAudioOutput(self.videoAudioOutput)
-        self.videoWidget.setGeometry(self.label_image.geometry())
-        self.videoWidget.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-        # TODO: Use QGraphicsScene, videoitem (QGraphicsVideoItem) instead to allow for opacity effect:
-        # https://forum.qt.io/topic/73384/video-to-image-transitions/2
-
         self.audioPlayer.setAudioOutput(self.musicAudioOutput)
         self.audioPlayer.setLoops(QtMultimedia.QMediaPlayer.Loops.Infinite)
+
+        self.supported_mimetypes = get_supported_mime_types()
 
         self.opacityEffect = QtWidgets.QGraphicsOpacityEffect()
 
@@ -1823,7 +1936,6 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
         self.in_point_connection = None
         self.out_point_connection = None
 
-
     def close(self):
         self.videoPlayer.stop()
         self.audioPlayer.stop()
@@ -1834,12 +1946,10 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                 QtCore.QEvent.Type.Resize, QtCore.QEvent.Type.Move, QtCore.QEvent.Type.Show):
             window_size = self.size()
 
-            self.label_image.move(0, 0)
-            self.label_image.setFixedSize(window_size)
-            self.label_image.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.graphicsView.move(0, 0)
+            self.graphicsView.setFixedSize(window_size)
 
-            self.videoWidget.move(0, 0)
-            self.videoWidget.setFixedSize(window_size)
+            '''
             scene = self.parent.parent.mvshow.getScene(self.parent.current_scene)
             if scene.scene_type == Scene_Type.STILL:
                 pixmap = QtGui.QPixmap()
@@ -1848,6 +1958,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                     self.label_image,
                     pixmap,
                     QtCore.Qt.TransformationMode.SmoothTransformation))
+            '''
         return super(Ui_multiVisionShow, self).eventFilter(source, event)
 
     def loadScene(self, scene: Mv_Scene):
@@ -1856,16 +1967,21 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             pixmap.load(scene.source)
             self.videoPlayer.stop()
             self.videoPlayer.setSource(QtCore.QUrl())
-            self.videoWidget.hide()
-            self.label_image.setPixmap(scalePixmapToWidget(
-                self.label_image,
+
+            image_item = QtWidgets.QGraphicsPixmapItem()
+            image_item.setPixmap(scalePixmapToWidget(
+                self.graphicsView,
                 pixmap,
                 QtCore.Qt.TransformationMode.SmoothTransformation))
-            self.label_image.setGraphicsEffect(self.opacityEffect)
-            self.label_image.show()
-            self.label_image.raise_()
+            image_item.setGraphicsEffect(self.opacityEffect)
+            graphics_scene = QtWidgets.QGraphicsScene()
+            graphics_scene.addItem(image_item)
+
+            self.graphicsView.items().clear()
+            self.graphicsView.viewport().update()
+            self.graphicsView.setScene(graphics_scene)
+
         elif scene.scene_type == Scene_Type.VIDEO:
-            self.label_image.hide()
             # TODO: Check if MIME Type of scene.source is supported and the file exists
             self.videoPlayer.setSource(QtCore.QUrl.fromLocalFile(scene.source))
 
@@ -1891,11 +2007,22 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             if scene.play_video_audio and not self.parent.pushButton_audio_quiet.isChecked():
                 self.parent.pushButton_audio_quiet.click()
 
-            self.videoPlayer.play()
             self.parent.parent.mvshow.state_changed.connect(self.manageVideoPlayback)
-            self.videoWidget.setGraphicsEffect(self.opacityEffect)
-            self.videoWidget.show()
-            self.videoWidget.raise_()
+
+            video_item = QtMultimediaWidgets.QGraphicsVideoItem()
+            video_item.setSize(self.graphicsView.size().toSizeF())
+            video_item.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            video_item.setGraphicsEffect(self.opacityEffect)
+            self.videoPlayer.setVideoOutput(video_item)
+
+            graphics_scene = QtWidgets.QGraphicsScene()
+            graphics_scene.addItem(video_item)
+
+            self.graphicsView.items().clear()
+            self.graphicsView.viewport().update()
+            self.graphicsView.setScene(graphics_scene)
+
+            self.videoPlayer.play()
 
         self.scene_fade_in_anim.start()
 

@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>400</width>
-    <height>300</height>
+    <width>1081</width>
+    <height>786</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -71,56 +71,36 @@
   <property name="windowTitle">
    <string/>
   </property>
-  <widget class="QLabel" name="label_image">
-   <property name="geometry">
-    <rect>
-     <x>10</x>
-     <y>10</y>
-     <width>191</width>
-     <height>151</height>
-    </rect>
-   </property>
-   <property name="sizePolicy">
-    <sizepolicy hsizetype="Maximum" vsizetype="Maximum">
-     <horstretch>0</horstretch>
-     <verstretch>0</verstretch>
-    </sizepolicy>
-   </property>
-   <property name="contextMenuPolicy">
-    <enum>Qt::ContextMenuPolicy::NoContextMenu</enum>
-   </property>
-   <property name="autoFillBackground">
+  <widget class="QGraphicsView" name="graphicsView">
+   <property name="acceptDrops">
     <bool>false</bool>
    </property>
-   <property name="text">
-    <string/>
+   <property name="frameShape">
+    <enum>QFrame::Shape::NoFrame</enum>
    </property>
-   <property name="scaledContents">
+   <property name="verticalScrollBarPolicy">
+    <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+   </property>
+   <property name="horizontalScrollBarPolicy">
+    <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+   </property>
+   <property name="backgroundBrush">
+    <brush brushstyle="SolidPattern">
+     <color alpha="255">
+      <red>0</red>
+      <green>0</green>
+      <blue>0</blue>
+     </color>
+    </brush>
+   </property>
+   <property name="interactive">
     <bool>false</bool>
    </property>
-  </widget>
-  <widget class="QVideoWidget" name="videoWidget" native="true">
-   <property name="geometry">
-    <rect>
-     <x>219</x>
-     <y>10</y>
-     <width>171</width>
-     <height>161</height>
-    </rect>
-   </property>
-   <property name="autoFillBackground">
-    <bool>false</bool>
+   <property name="renderHints">
+    <set>QPainter::RenderHint::Antialiasing|QPainter::RenderHint::LosslessImageRendering|QPainter::RenderHint::SmoothPixmapTransform|QPainter::RenderHint::TextAntialiasing</set>
    </property>
   </widget>
  </widget>
- <customwidgets>
-  <customwidget>
-   <class>QVideoWidget</class>
-   <extends>QWidget</extends>
-   <header>PyQt6.QtMultimediaWidgets</header>
-   <container>1</container>
-  </customwidget>
- </customwidgets>
  <resources/>
  <connections/>
 </ui>
