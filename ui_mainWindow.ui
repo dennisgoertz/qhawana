@@ -693,7 +693,7 @@
     <property name="title">
      <string>Help</string>
     </property>
-    <addaction name="actionAbout_pyMultiVision"/>
+    <addaction name="actionAbout_Qhawana"/>
    </widget>
    <addaction name="menupyMultiVision"/>
    <addaction name="menuSettings"/>
@@ -747,9 +747,9 @@
     <string>Save As...</string>
    </property>
   </action>
-  <action name="actionAbout_pyMultiVision">
+  <action name="actionAbout_Qhawana">
    <property name="text">
-    <string>About pyMultiVision</string>
+    <string>About Qhawana</string>
    </property>
   </action>
   <action name="actionPreferences">

@@ -334,8 +334,8 @@ class Ui_mainWindow_Qhawana(object):
         self.actionSave_as.setObjectName("actionSave_as")
         self.actionSave_As = QtGui.QAction(parent=mainWindow_Qhawana)
         self.actionSave_As.setObjectName("actionSave_As")
-        self.actionAbout_pyMultiVision = QtGui.QAction(parent=mainWindow_Qhawana)
-        self.actionAbout_pyMultiVision.setObjectName("actionAbout_pyMultiVision")
+        self.actionAbout_Qhawana = QtGui.QAction(parent=mainWindow_Qhawana)
+        self.actionAbout_Qhawana.setObjectName("actionAbout_Qhawana")
         self.actionPreferences = QtGui.QAction(parent=mainWindow_Qhawana)
         self.actionPreferences.setObjectName("actionPreferences")
         self.menupyMultiVision.addSeparator()
@@ -348,7 +348,7 @@ class Ui_mainWindow_Qhawana(object):
         self.menupyMultiVision.addSeparator()
         self.menupyMultiVision.addAction(self.actionQuit)
         self.menuSettings.addAction(self.actionPreferences)
-        self.menuHelp.addAction(self.actionAbout_pyMultiVision)
+        self.menuHelp.addAction(self.actionAbout_Qhawana)
         self.menubar.addAction(self.menupyMultiVision.menuAction())
         self.menubar.addAction(self.menuSettings.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
@@ -388,7 +388,7 @@ class Ui_mainWindow_Qhawana(object):
         self.actions.setText(_translate("mainWindow_Qhawana", "s"))
         self.actionSave_as.setText(_translate("mainWindow_Qhawana", "Save as..."))
         self.actionSave_As.setText(_translate("mainWindow_Qhawana", "Save As..."))
-        self.actionAbout_pyMultiVision.setText(_translate("mainWindow_Qhawana", "About pyMultiVision"))
+        self.actionAbout_Qhawana.setText(_translate("mainWindow_Qhawana", "About Qhawana"))
         self.actionPreferences.setText(_translate("mainWindow_Qhawana", "Preferences..."))
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from Qhawana_main import FilmStripWidget, ProjectBinWidget, SceneTableWidget
