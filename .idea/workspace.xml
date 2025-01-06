@@ -67,7 +67,7 @@
   </component>
   <component name="RunManager">
     <configuration name="Qhawana_main" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true" show_console_on_std_err="true">
-      <module name="pyMultiVision" />
+      <module name="Qhawana" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
