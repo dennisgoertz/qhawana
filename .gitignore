@@ -1,7 +1,5 @@
-/show.pmv
-/dolomiten.pmv
-/azoren.pmv
-/.venc
+/tests
+/.venv
 /.idea/workspace.xml
 /.idea/usage.statistics.xml
 /.idea/shelf
