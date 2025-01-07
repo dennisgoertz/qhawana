@@ -1123,6 +1123,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.actionSave.triggered.connect(self.saveToFile)
         self.actionSave_As.triggered.connect(self.saveAsFileDialog)
         self.actionQuit.triggered.connect(self.quitProject, QtCore.Qt.ConnectionType.QueuedConnection)
+        self.actionAbout_Qhawana.triggered.connect(splash_screen.show)
 
         self.spinBox_transitionTime.valueChanged.connect(
             lambda x: self.project.settings.setProperty("transition_time", x))
@@ -2060,9 +2061,21 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    ui = Ui_mainWindow()
+
+    splash_width = app.primaryScreen().geometry().width() // 4
+    splash_pixmap = QtGui.QPixmap("assets/Qhawana_Logo.png")
+    if splash_pixmap.width() > splash_width:
+        splash_pixmap = splash_pixmap.scaled(splash_width, app.primaryScreen().geometry().height() // 2,
+                                             QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                             QtCore.Qt.TransformationMode.SmoothTransformation)
+    splash_screen = QtWidgets.QSplashScreen(splash_pixmap)
+    splash_screen.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+    splash_screen.show()
 
     qtmodern.styles.dark(app)
+
+    ui = Ui_mainWindow()
+    splash_screen.finish(ui)
 
     if len(sys.argv) > 1:
         ui.loadFromFile(sys.argv[1])
