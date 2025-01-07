@@ -1,4 +1,12 @@
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
+
 import PyQt6.QtCore
+import datetime
 import exiftool
 import av
 import gzip
@@ -43,9 +51,10 @@ class WorkerSignals(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
 
 
+# noinspection PyBroadException
 class Worker(QtCore.QRunnable):
     def __init__(self, fn, *args, **kwargs):
-        super(Worker, self).__init__()
+        super().__init__()
 
         # Store constructor arguments (re-used for processing)
         self.fn = fn
@@ -76,30 +85,18 @@ class Worker(QtCore.QRunnable):
 
 
 class Mv_Project(QtCore.QObject):
-    def __init__(self):
-        super().__init__()
-        self.show = Mv_Show()
-        self.bin = ProjectBinModel()
-        self.settings = ProjectSettings()
-
-    def clear_bin(self):
-        self.bin.clear()
-        root = self.bin.invisibleRootItem()
-        for n in ["STILLS", "VIDEO", "AUDIO"]:
-            item = QtGui.QStandardItem(n)
-            item.setDragEnabled(False)
-            item.setDropEnabled(True)
-            root.appendRow(item)
-        self.bin.setHorizontalHeaderLabels(["File", "Details"])
-
-        return self.bin
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.mv_show = Mv_Show(self)
+        self.bin = ProjectBinModel(self)
+        self.settings = ProjectSettings(self)
 
 
 class Mv_Show(QtCore.QObject):
     state_changed = PyQt6.QtCore.pyqtSignal(str)
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.sequence = Mv_sequence(parent=self)
         self.__state = Show_States.STOPPED
 
@@ -146,7 +143,7 @@ class Mv_Show(QtCore.QObject):
         return self.sequence
 
     def getScene(self, index=0):
-        return self.sequence.item(index, 0) if 0 <= index < self.length() else False
+        return self.sequence.item(index) if 0 <= index < self.length() else False
 
 
 class Mv_sequence(QtCore.QAbstractTableModel):
@@ -160,7 +157,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
     _horizontal_headers = []
 
     def __init__(self, parent=None):
-        super().__init__()
+        super().__init__(parent=parent)
         self.setHorizontalHeaderLabels(["Visual source", "Audio source", "Capture Time",
                                         "Duration", "In Point", "Out Point"])
 
@@ -291,6 +288,9 @@ class Mv_sequence(QtCore.QAbstractTableModel):
     def rowCount(self, parent=...):
         return len(self._sequence)
 
+    def sceneCount(self):
+        return len(self._scenes)
+
     def appendRow(self, item: QtGui.QStandardItem):
         length = self.rowCount()
         self.beginInsertRows(self.index(self.rowCount() - 1, 0), length, length)
@@ -307,7 +307,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
             self._horizontal_headers.append(text)
         self.headerDataChanged.emit(QtCore.Qt.Orientation.Horizontal, 0, len(labels) - 1)
 
-    def item(self, row, column=0):
+    def item(self, row):
         try:
             item = self._sequence[row]
         except IndexError:
@@ -323,7 +323,6 @@ class Mv_sequence(QtCore.QAbstractTableModel):
             return False
 
         return self._scenes[item_uuid]
-        # return self.data(self.index(row, column), QtCore.Qt.ItemDataRole.UserRole)
 
     def supportedDragActions(self):
         return QtCore.Qt.DropAction.MoveAction
@@ -376,7 +375,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
     def dropMimeData(self, data, action, row, column, parent):
         QtCore.qDebug(f"Handling {action}")
-        if data.hasFormat('application/x-qabstractitemmodeldatalist'):
+        if data.hasFormat("application/x-qabstractitemmodeldatalist"):
             QtCore.qDebug("Dropping application/x-qabstractitemmodeldatalist")
             if not data or not action == QtCore.Qt.DropAction.MoveAction:
                 return False
@@ -474,7 +473,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
 class Mv_Scene(QtGui.QStandardItem):
     def __init__(self, source: str, scene_type: Scene_Type, audio_source="", pause=False, duration=-1,
-                 in_point=-1, out_point=-1, play_video_audio=False, pixmap=None, notes="", exif=None):
+                 in_point=-1, out_point=-1, play_video_audio=False, pixmap=None, notes="", exif=None, parent=None):
 
         self.uuid = QtCore.QUuid().createUuid()
         self.source = source
@@ -492,34 +491,22 @@ class Mv_Scene(QtGui.QStandardItem):
         self.exif = exif
 
         if self.source:
-            file_sha1 = hashlib.sha1()
             try:
-                with open(self.source, 'rb') as f:
-                    while True:
-                        data = f.read(BUF_SIZE)
-                        if not data:
-                            break
-                        file_sha1.update(data)
+                source_hash = getFileHashSHA1(self.source, used_for_security=False)
             except FileNotFoundError:
                 QtCore.qWarning(f"Source file {self.source} not found for scene {self.uuid.toString()}")
                 pass
             else:
-                self.source_hash = file_sha1.hexdigest()
+                self.source_hash = source_hash
 
         if self.audio_source:
-            file_sha1 = hashlib.sha1()
             try:
-                with open(self.audio_source, 'rb') as f:
-                    while True:
-                        data = f.read(BUF_SIZE)
-                        if not data:
-                            break
-                        file_sha1.update(data)
+                audio_source_hash = getFileHashSHA1(self.audio_source, used_for_security=False)
             except FileNotFoundError:
                 QtCore.qWarning(f"Audio source file {self.audio_source} not found for scene {self.uuid.toString()}")
                 pass
             else:
-                self.audio_source_hash = file_sha1.hexdigest()
+                self.audio_source_hash = audio_source_hash
 
         self.icon = QtGui.QIcon()
         self.icon.addPixmap(self.pixmap.scaled(MV_ICON_SIZE, MV_ICON_SIZE,
@@ -528,7 +515,7 @@ class Mv_Scene(QtGui.QStandardItem):
                             QtGui.QIcon.Mode.Normal,
                             QtGui.QIcon.State.Off)
 
-        super().__init__()
+        super().__init__(parent)
 
     def __getstate__(self):
         state = [self.uuid, self.source, self.audio_source, self.scene_type,
@@ -551,9 +538,10 @@ class Mv_Scene(QtGui.QStandardItem):
         self.exif = state[7]
         self.pixmap = QtGui.QPixmap()
         stream = QtCore.QDataStream(state[8], QtCore.QIODevice.OpenModeFlag.ReadOnly)
-        stream >> self.pixmap
-        # self.pixmap = QtGui.QPixmap(self.source)
-        # self.pixmap = None
+        if not stream.atEnd():
+            self.pixmap.loadFromData(stream.readBytes())
+        elif self.source:
+            self.pixmap.load(self.source)
 
     def toJson(self, store_pixmap=False) -> dict:
         json_dict = {"source": self.source,
@@ -633,9 +621,8 @@ class Mv_Scene(QtGui.QStandardItem):
 
 
 class FilmStripWidget(QtWidgets.QListView):
-    pass
-    # def __init__(self, parent=None):
-    #    super(FilmStripWidget, self).__init__(parent)
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
 
 class FilmStripItemDelegate(QtWidgets.QStyledItemDelegate):
@@ -729,8 +716,13 @@ class SceneTableWidget(QtWidgets.QTableView):
             self.setDragDropOverwriteMode(False)
 
             formats = e.mimeData().formats()
-            if ("x-application-Qhawana-STILLS" in formats or "x-application-Qhawana-VIDEO" in formats and
-                index.column() == 0) or ("x-application-Qhawana-AUDIO" in formats and index.column() == 1):
+            if (index.isValid() and (
+                    ("x-application-Qhawana-STILLS" in formats or
+                     "x-application-Qhawana-VIDEO" in formats) and
+                    index.column() == 0) or
+                    ("x-application-Qhawana-AUDIO" in formats and
+                     index.column() == 1)
+            ):
                 self.setDropIndicatorShown(True)
                 e.accept()
             else:
@@ -745,12 +737,12 @@ class SceneTableTextOnlyDelegateCanBeRemoved(QtWidgets.QStyledItemDelegate):
     def paint(self, painter, option, index):
         text = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
 
-        textFont = QtGui.QFont(option.font)
-        textFont.setPixelSize(20)
-        fm = QtGui.QFontMetrics(textFont)
-        textRect = QtCore.QRectF(option.rect)
+        text_font = QtGui.QFont(option.font)
+        text_font.setPixelSize(20)
+        fm = QtGui.QFontMetrics(text_font)
+        text_rect = QtCore.QRectF(option.rect)
         # titleRect.setLeft(iconRect.right())
-        textRect.setHeight(fm.height())
+        text_rect.setHeight(fm.height())
 
         color = (
             option.palette.color(QtGui.QPalette.ColorRole.BrightText)
@@ -758,17 +750,17 @@ class SceneTableTextOnlyDelegateCanBeRemoved(QtWidgets.QStyledItemDelegate):
             else option.palette.color(QtGui.QPalette.ColorRole.WindowText)
         )
         painter.save()
-        painter.setFont(textFont)
+        painter.setFont(text_font)
         pen = painter.pen()
         pen.setColor(color)
         painter.setPen(pen)
-        painter.drawText(textRect, text)
+        painter.drawText(text_rect, text)
         painter.restore()
 
 
 class ProjectBinWidget(QtWidgets.QTreeView):
     def __init__(self, parent=None):
-        QtWidgets.QTreeView.__init__(self, parent)
+        super().__init__(parent)
         self.dragStartPosition = QtCore.QPoint()
 
     def dragEnterEvent(self, e):
@@ -818,7 +810,22 @@ class ProjectBinWidget(QtWidgets.QTreeView):
 
 class ProjectBinModel(QtGui.QStandardItemModel):
     def __init__(self, parent=None):
-        QtGui.QStandardItemModel.__init__(self, parent)
+        super().__init__(parent)
+
+        self.categoryItems = {"STILLS": None, "AUDIO": None, "VIDEO": None}
+
+    def clear(self):
+        super().clear()
+        self.beginResetModel()
+        root = self.invisibleRootItem()
+        for c in self.categoryItems.keys():
+            ci = QtGui.QStandardItem(c)
+            ci.setDragEnabled(False)
+            ci.setDropEnabled(True)
+            self.categoryItems[c] = ci
+            root.appendRow(ci)
+        self.setHorizontalHeaderLabels(["File", "Details"])
+        self.endResetModel()
 
     def supportedDropActions(self):
         return QtCore.Qt.DropAction.IgnoreAction
@@ -861,39 +868,52 @@ class ProjectBinModel(QtGui.QStandardItemModel):
 
     def toJson(self, progress_callback):
         items = {}
+        item_count = 0
+        cur_item = 0
+
+        for i in range(self.rowCount()):
+            item_count += countRowsOfIndex(self.index(i,0))
 
         for index, data in forEach(self):
-            items[data] = []
             if index:
+                items[index.data()] = []
                 for i, d in forEach(self, index):
-                    items[data].append(d)
+                    cur_item += 1
+                    items[index.data()].append(d)
+                    progress_callback.emit(cur_item // item_count * 100)
 
         json_string = {"project_bin": items}
+
         return json_string
 
-    def fromJson(self, json_string: dict):
-        root = self.invisibleRootItem()
+    def fromJson(self, json_string: dict, progress_callback):
+        num_items = 0
+        for items in json_string.values():
+            num_items += len(items)
 
         self.beginResetModel()
         self.removeRows(0, self.rowCount())
 
-        for key, value in json_string.items():
-            category_item = QtGui.QStandardItem(key)
-            root.appendRow(category_item)
+        self.clear()
 
-            for v in value:
+        cur_item = 0
+        for category, items in json_string.items():
+            for v in items:
+                cur_item += 1
+                progress_callback.emit(cur_item // num_items * 100)
+
                 file = os.path.basename(v)
                 bin_item = QtGui.QStandardItem(file)
                 pixmap = None
 
-                if key == "AUDIO":
+                if category == "AUDIO":
                     pixmap = QtGui.QPixmap(MV_ICON_SIZE, MV_ICON_SIZE)
                     pixmap.fill(QtGui.QColor("black"))
-                elif key == "STILLS":
+                elif category == "STILLS":
                     pixmap = QtGui.QPixmap(v).scaled(MV_ICON_SIZE, MV_ICON_SIZE,
                                                      QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                                      QtCore.Qt.TransformationMode.FastTransformation)
-                elif key == "VIDEO":
+                elif category == "VIDEO":
                     keyframe_image = getKeyframeFromVideo(v)
                     pixmap = (QtGui.QPixmap().fromImage(keyframe_image).
                               scaled(MV_ICON_SIZE, MV_ICON_SIZE,
@@ -906,7 +926,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                     bin_item.setData(html, QtCore.Qt.ItemDataRole.ToolTipRole)
 
                 bin_item.setData(v, QtCore.Qt.ItemDataRole.UserRole)
-                category_item.appendRow(bin_item)
+                self.categoryItems[category].appendRow(bin_item)
 
         self.endResetModel()
 
@@ -921,6 +941,17 @@ def forEach(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):
         else:
             yield None, data
 
+def countRowsOfIndex(index = QtCore.QModelIndex()):
+    count: int = 0
+    model: QtCore.QAbstractItemModel = index.model()
+    if model is None:
+        return 0
+    row_count: int = model.rowCount(index)
+    count += row_count
+    for r in range(row_count):
+        count += countRowsOfIndex(model.index(r, 0, index))
+    return count
+
 
 class BinItem(QtGui.QStandardItem):
     def __init__(self, *__args):
@@ -930,9 +961,9 @@ class BinItem(QtGui.QStandardItem):
 class ProjectSettings(QtCore.QObject):
     valueChanged = QtCore.pyqtSignal(str, QtCore.QVariant, name="valueChanged")
 
-    def __init__(self):
+    def __init__(self, parent=None):
         self.__settings = {"transition_time": 1000, "default_delay": 5000}
-        super().__init__()
+        super().__init__(parent)
 
     def toJson(self) -> {str}:
         return {"settings": json.dumps(self.__settings)}
@@ -1044,6 +1075,17 @@ def timeStringFromMsec(msec: int):
 
     return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
+def getFileHashSHA1(path: str, used_for_security=True):
+    file_sha1 = hashlib.sha1(usedforsecurity=used_for_security)
+    with open(path, 'rb') as f:
+        while True:
+            data = f.read(BUF_SIZE)
+            if not data:
+                break
+            file_sha1.update(data)
+
+    return file_sha1.hexdigest()
+
 
 class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def __init__(self):
@@ -1054,8 +1096,8 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             self.pushButton_playPausePreview.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaPlay))
 
         self.project = Mv_Project()
-        self.project.mvshow = Mv_Show()
-        self.mvshow = self.project.mvshow
+        self.project.bin.clear()
+        self.mv_show = self.project.mv_show
         self.pv = None
         self.save_file = None
         self.changes_saved = True
@@ -1070,9 +1112,8 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.pushButton_outPoint.clicked.connect(self.setVideoOutPoint)
         self.videoTimer = QtCore.QTimer()
 
-        sequence_model = self.mvshow.sequence
-        self.listView_filmStrip.setModel(sequence_model)
-        self.tableView_scenes.setModel(sequence_model)
+        self.listView_filmStrip.setModel(self.mv_show.sequence)
+        self.tableView_scenes.setModel(self.mv_show.sequence)
         self.tableView_scenes.setSelectionMode(self.tableView_scenes.SelectionMode.ContiguousSelection)
         self.tableView_scenes.setSelectionBehavior(self.tableView_scenes.SelectionBehavior.SelectRows)
         self.tableView_scenes.setDragDropMode(self.tableView_scenes.DragDropMode.DragDrop)
@@ -1086,7 +1127,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.tableView_scenes.setAcceptDrops(True)
         self.tableView_scenes.setSortingEnabled(True)
 
-        bin_model = self.project.clear_bin()
+        bin_model = self.project.bin
         self.treeView.setModel(bin_model)
         self.treeView.header().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
@@ -1105,18 +1146,18 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         self.pushButton_mediaSourceDirectory.clicked.connect(self.sceneFromDirectoryDialog)
         self.pushButton_startShow.clicked.connect(self.openPresenterView)
-        self.mvshow.sequence.dataChanged.connect(self.changed)
-        self.mvshow.sequence.layoutChanged.connect(self.changed)
-        self.mvshow.sequence.rowsInserted.connect(self.changed)
-        self.mvshow.sequence.rowsRemoved.connect(self.changed)
+        self.mv_show.sequence.dataChanged.connect(self.changed)
+        self.mv_show.sequence.layoutChanged.connect(self.changed)
+        self.mv_show.sequence.rowsInserted.connect(self.changed)
+        self.mv_show.sequence.rowsRemoved.connect(self.changed)
         self.project.settings.valueChanged.connect(self.changed)
-        self.mvshow.sequence.rowsRemoved.connect(self.showScenePreview)
+        self.mv_show.sequence.rowsRemoved.connect(self.showScenePreview)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.syncSelection)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.showScenePreview)
         self.listView_filmStrip.selectionModel().selectionChanged.connect(self.syncSelection)
         self.listView_filmStrip.selectionModel().selectionChanged.connect(self.showScenePreview)
         self.treeView.selectionModel().selectionChanged.connect(self.showBinPreview)
-        self.mvshow.sequence.rowsInserted.connect(self.tableView_scenes.resizeColumnsToContents)
+        self.mv_show.sequence.rowsInserted.connect(self.tableView_scenes.resizeColumnsToContents)
         self.textEdit_notes.textChanged.connect(self.updateSceneNotes)
         self.actionNew.triggered.connect(self.newProject)
         self.actionOpen.triggered.connect(self.loadFromFile)
@@ -1140,16 +1181,16 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         QtWidgets.QMainWindow.resizeEvent(self, event)
 
     def closeEvent(self, event):
-        # Override QMainwindow's closeEvent handler to
+        # Override the closeEvent handler of QMainwindow to
         # ignore the close event and call quitProject instead to handle unsaved changes
         event.ignore()
         self.quitProject()
 
     def newProject(self):
         if self.changes_saved:
-            self.project.clear_bin()
-            self.mvshow.sequence.clear()
-            self.mvshow.sequence.__init__()
+            self.project.bin.clear()
+            self.mv_show.sequence.clear()
+            self.mv_show.sequence.__init__()
             self.save_file = None
             self.scene_index = 0
             self.resetProgressBar()
@@ -1260,13 +1301,16 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         return answer
 
     def saveProjectToFile(self, file_name, progress_callback):
-        with gzip.open(self.save_file, 'wt', encoding='ascii') as f:
+        f: SupportsWrite[str]
+        with gzip.open(file_name, 'wt', encoding='ascii') as f:
             settings = self.project.settings.toJson()
             project_bin = self.project.bin.toJson(progress_callback)
-            show = self.mvshow.toJson(progress_callback)
+            show = self.mv_show.toJson(progress_callback)
             json.dump(settings | project_bin | show, f)
 
     def loadProjectFromFile(self, file_name, progress_callback):
+        QtCore.qInfo(f"{datetime.datetime.now()} Loading project from file {file_name}")
+
         try:
             with gzip.open(file_name, 'r') as f:
                 json_string = json.load(f)
@@ -1274,24 +1318,25 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             with open(file_name, 'r') as f:
                 json_string = json.load(f)
 
-        QtCore.qInfo(f"Loading project from file {file_name}")
-
+        print(f"{datetime.datetime.now()} Loading settings")
         if "settings" in json_string:
-            QtCore.qDebug(f"Loading project settings {json_string["settings"]}")
+            QtCore.qDebug(f"Loading project settings {json_string['settings']}")
             self.project.settings.fromJson(json_string["settings"])
             if self.project.settings.getProperty("default_delay"):
                 self.spinBox_defaultDelay.setValue(self.project.settings.getProperty("default_delay"))
             if self.project.settings.getProperty("transition_time"):
                 self.spinBox_transitionTime.setValue(self.project.settings.getProperty("transition_time"))
 
+        print(f"{datetime.datetime.now()} Loading bin")
         if "project_bin" in json_string:
-            self.project.bin.fromJson(json_string["project_bin"])
+            self.project.bin.fromJson(json_string["project_bin"], progress_callback)
 
+        print(f"{datetime.datetime.now()} Loading scenes")
         if "scenes" in json_string:
-            QtCore.qDebug(f"Loading {len(json_string["scenes"])} scenes")
-            self.mvshow.fromJson(json_string["scenes"], progress_callback)
+            QtCore.qDebug(f"Loading {len(json_string['scenes'])} scenes")
+            self.mv_show.fromJson(json_string["scenes"], progress_callback)
 
-        QtCore.qInfo(f"Project loaded from file {file_name}")
+        QtCore.qInfo(f"{datetime.datetime.now()} Project loaded from file {file_name}")
 
         self.save_file = file_name
         self.changes_saved = True
@@ -1338,7 +1383,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 continue
 
             if mimetype.startswith("image/"):
-                audiopath = ""
+                audio_path = ""
                 pixmap = QtGui.QPixmap(path)
                 # try:
                 #     pil_image = PIL.Image.open(path)
@@ -1348,7 +1393,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
                 exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
                 scene = Mv_Scene(source=path,
-                                 audio_source=audiopath,
+                                 audio_source=audio_path,
                                  pixmap=pixmap.scaled(MV_PREVIEW_SIZE, MV_PREVIEW_SIZE,
                                                       QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                                       QtCore.Qt.TransformationMode.SmoothTransformation),
@@ -1419,7 +1464,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 # Audio items will only be added to the project bin, but no scene item will be created, so continue:
                 continue
             else:
-                QtCore.qInfo(f"File {file.encode("utf-8", "ignore")} ({mimetype}) is not supported.")
+                QtCore.qInfo(f"File {file.encode('utf-8', 'ignore')} ({mimetype}) is not supported.")
                 # Files with MIME types that we do not understand will be ignored, so continue:
                 continue
 
@@ -1427,7 +1472,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             scene_item.setData(scene)
             scene_item.setDropEnabled(False)
 
-            self.mvshow.sequence.appendRow(scene_item)
+            self.mv_show.sequence.appendRow(scene_item)
 
         return True
 
@@ -1445,7 +1490,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.listView_filmStrip.setEnabled(True)
 
     def openPresenterView(self):
-        if self.mvshow.length() > 0:
+        if self.mv_show.length() > 0:
             self.pv = Ui_presenterView(parent=self)
             if len(self.screens) > 1:
                 qr = self.screens[0].geometry()
@@ -1514,9 +1559,9 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         if scene_index.isValid():
             QtCore.qDebug(f"Showing preview for row {scene_index.row()} "
-                          f"({len(self.mvshow.sequence._sequence)} items in list, "
-                          f"{len(self.mvshow.sequence._scenes)} scenes in show)")
-            scene: Mv_Scene = self.mvshow.sequence.item(scene_index.row())
+                          f"({self.mv_show.sequence.rowCount()} items in list, "
+                          f"{self.mv_show.sequence.sceneCount()} scenes in show)")
+            scene: Mv_Scene = self.mv_show.sequence.item(scene_index.row())
 
             if scene:
                 self.scene_index = scene_index.row()
@@ -1577,25 +1622,25 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         if self.videoPreviewPlayer.isPlaying():
             self.horizontalSlider_videoPosition.setValue(self.videoPreviewPlayer.position())
 
-            scene = self.mvshow.sequence.item(self.scene_index)
+            scene = self.mv_show.sequence.item(self.scene_index)
             if position == scene.out_point:
                 self.videoPreviewPlayer.pause()
         else:
             self.videoPreviewPlayer.setPosition(position)
 
     def setVideoInPoint(self):
-        scene_index = self.mvshow.sequence.index(self.scene_index, 4)
+        scene_index = self.mv_show.sequence.index(self.scene_index, 4)
         if scene_index.isValid():
-            self.mvshow.sequence.setData(scene_index,
-                                         self.horizontalSlider_videoPosition.value(),
-                                         QtCore.Qt.ItemDataRole.EditRole)
+            self.mv_show.sequence.setData(scene_index,
+                                          self.horizontalSlider_videoPosition.value(),
+                                          QtCore.Qt.ItemDataRole.EditRole)
 
     def setVideoOutPoint(self):
-        scene_index = self.mvshow.sequence.index(self.scene_index, 5)
+        scene_index = self.mv_show.sequence.index(self.scene_index, 5)
         if scene_index.isValid():
-            self.mvshow.sequence.setData(scene_index,
-                                         self.horizontalSlider_videoPosition.value(),
-                                         QtCore.Qt.ItemDataRole.EditRole)
+            self.mv_show.sequence.setData(scene_index,
+                                          self.horizontalSlider_videoPosition.value(),
+                                          QtCore.Qt.ItemDataRole.EditRole)
 
     def syncSelection(self, selection):
         indexes = selection.indexes()
@@ -1618,7 +1663,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 # self.listView_filmStrip.blockSignals(False)
 
     def updateSceneNotes(self):
-        scene = self.mvshow.sequence.item(self.scene_index)
+        scene = self.mv_show.sequence.item(self.scene_index)
         if scene:
             scene_data = scene
             scene_data.notes = self.textEdit_notes.toPlainText()
@@ -1667,8 +1712,8 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.pushButton_audio_fadeOut.clicked.connect(lambda x: self.controlAudio("fade_out"))
         self.dial_volume.valueChanged.connect(lambda x: self.controlAudio("volume"))
 
-        self.parent.mvshow.state_changed.connect(self.progressBar_state.setFormat)
-        self.parent.mvshow.state_changed.connect(lambda x: self.scene_runner())
+        self.parent.mv_show.state_changed.connect(self.progressBar_state.setFormat)
+        self.parent.mv_show.state_changed.connect(lambda x: self.scene_runner())
         self.scene_changed.connect(self.scene_runner)
 
         self.audio_fade_in_anim = QtCore.QPropertyAnimation(self.mv.musicAudioOutput, b"volume")
@@ -1685,9 +1730,9 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.progress_animation.setEndValue(100)
 
         self.audio_fade_in_anim.finished.connect(self.fadeInFinished)
-        self.audio_fade_in_anim.finished.connect(lambda: self.uncheckPushButton(self.pushButton_audio_fadeIn))
+        self.audio_fade_in_anim.finished.connect(lambda: self.pushButton_audio_fadeIn.setChecked(False))
         self.audio_fade_out_anim.finished.connect(self.fadeOutFinished)
-        self.audio_fade_out_anim.finished.connect(lambda: self.uncheckPushButton(self.pushButton_audio_fadeOut))
+        self.audio_fade_out_anim.finished.connect(lambda: self.pushButton_audio_fadeOut.setChecked(False))
 
         self.scene_timer = QtCore.QTimer()
 
@@ -1695,7 +1740,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.changeScene("first")
 
     def close(self):
-        self.parent.mvshow.set_state(Show_States.STOPPED)
+        self.parent.mv_show.set_state(Show_States.STOPPED)
         super().close()
 
     def eventFilter(self, source, event):
@@ -1714,12 +1759,12 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         return super(Ui_presenterView, self).eventFilter(source, event)
 
     def scene_runner(self, scene_index=None):
-        if self.parent.mvshow.state() == Show_States.RUNNING:
+        if self.parent.mv_show.state() == Show_States.RUNNING:
             if scene_index is None:
                 self.mv.scene_fade_out_anim.start()
                 QtCore.qDebug(f"Fading out scene {self.current_scene}")
             else:
-                scene = self.parent.mvshow.getScene(scene_index)
+                scene = self.parent.mv_show.getScene(scene_index)
                 if scene.duration > 0 or scene.duration == -1:
                     if 0 <= scene.in_point < scene.out_point:
                         duration = scene.out_point - scene.in_point
@@ -1745,7 +1790,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             self.scene_timer.stop()
 
     def changeScene(self, action, index=None):
-        length = self.parent.mvshow.length()
+        length = self.parent.mv_show.length()
 
         if length == 0:
             return False
@@ -1761,25 +1806,22 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         else:
             return False
 
-        scene = self.parent.mvshow.getScene(self.current_scene)
-        prev_scene = self.parent.mvshow.getScene(self.current_scene - 1) if self.current_scene > 0 else None
-        next_scene = self.parent.mvshow.getScene(self.current_scene + 1) if self.current_scene < (length - 1) else None
+        scene = self.parent.mv_show.getScene(self.current_scene)
+        prev_scene = self.parent.mv_show.getScene(self.current_scene - 1) if self.current_scene > 0 else None
+        next_scene = self.parent.mv_show.getScene(self.current_scene + 1) if self.current_scene < (length - 1) else None
 
         self.label_sceneCounter.setText(f"{self.current_scene + 1}/{length}")
         self.updatePresenterView(scene, prev_scene, next_scene)
 
-        if self.parent.mvshow.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
+        if self.parent.mv_show.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
             self.mv.loadScene(scene)
-            if self.parent.mvshow.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
-                self.parent.mvshow.set_state(Show_States.FINISHED)
+            if self.parent.mv_show.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
+                self.parent.mv_show.set_state(Show_States.FINISHED)
 
         QtCore.qDebug(f"Changing scene to {self.current_scene}")
         self.scene_changed.emit(self.current_scene)
 
         return True
-
-    def uncheckPushButton(self, button: QtWidgets.QPushButton):
-        button.setChecked(False)
 
     def fadeInFinished(self):
         QtCore.qDebug(f"Audio fade in for scene {self.current_scene} is finished")
@@ -1864,7 +1906,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
 
     def startShow(self):
-        state = self.parent.mvshow.state()
+        state = self.parent.mv_show.state()
         try:
             self.mv.scene_fade_out_anim.finished.disconnect()
         except TypeError:
@@ -1878,19 +1920,19 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
                 self.mv.move(qr.left(), qr.top())
                 # self.mv.showFullScreen()
             self.mv.show()
-            self.parent.mvshow.set_state(Show_States.RUNNING)
+            self.parent.mv_show.set_state(Show_States.RUNNING)
         elif state == Show_States.PAUSED:
-            self.parent.mvshow.set_state(Show_States.RUNNING)
+            self.parent.mv_show.set_state(Show_States.RUNNING)
 
     def pauseShow(self):
-        if self.parent.mvshow.state() == Show_States.RUNNING:
+        if self.parent.mv_show.state() == Show_States.RUNNING:
             try:
                 self.mv.scene_fade_out_anim.finished.disconnect()
             except TypeError:
                 # A TypeError is raised if disconnect is called and there are no active connections
                 pass
 
-            self.parent.mvshow.set_state(Show_States.PAUSED)
+            self.parent.mv_show.set_state(Show_States.PAUSED)
             self.progressBar_state.setValue(0)
             # TODO: We could pause instead of stopping, but QTimer does not support pause and resume out of the box.
 
@@ -1950,16 +1992,6 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.graphicsView.move(0, 0)
             self.graphicsView.setFixedSize(window_size)
 
-            '''
-            scene = self.parent.parent.mvshow.getScene(self.parent.current_scene)
-            if scene.scene_type == Scene_Type.STILL:
-                pixmap = QtGui.QPixmap()
-                pixmap.load(scene.source)
-                self.label_image.setPixmap(scalePixmapToWidget(
-                    self.label_image,
-                    pixmap,
-                    QtCore.Qt.TransformationMode.SmoothTransformation))
-            '''
         return super(Ui_multiVisionShow, self).eventFilter(source, event)
 
     def loadScene(self, scene: Mv_Scene):
@@ -2008,7 +2040,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             if scene.play_video_audio and not self.parent.pushButton_audio_quiet.isChecked():
                 self.parent.pushButton_audio_quiet.click()
 
-            self.parent.parent.mvshow.state_changed.connect(self.manageVideoPlayback)
+            self.parent.parent.mv_show.state_changed.connect(self.manageVideoPlayback)
 
             video_item = QtMultimediaWidgets.QGraphicsVideoItem()
             video_item.setSize(self.graphicsView.size().toSizeF())
@@ -2053,19 +2085,21 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.videoPlayer.stop()
 
     def manageVideoPlayback(self):
-        if self.parent.parent.mvshow.state() == Show_States.PAUSED:
+        if self.parent.parent.mv_show.state() == Show_States.PAUSED:
             self.videoPlayer.pause()
-        elif self.parent.parent.mvshow.state() == Show_States.RUNNING:
+        elif self.parent.parent.mv_show.state() == Show_States.RUNNING:
             self.videoPlayer.play()
 
 
 if __name__ == "__main__":
+    av.logging.set_level(logging.ERROR)
     app = QtWidgets.QApplication(sys.argv)
 
-    splash_width = app.primaryScreen().geometry().width() // 4
+    splash_width = app.primaryScreen().geometry().width() // 2
+    splash_height = app.primaryScreen().geometry().height() // 2
     splash_pixmap = QtGui.QPixmap("assets/Qhawana_Logo.png")
-    if splash_pixmap.width() > splash_width:
-        splash_pixmap = splash_pixmap.scaled(splash_width, app.primaryScreen().geometry().height() // 2,
+    if splash_pixmap.width() > splash_width or splash_pixmap.height() > splash_height:
+        splash_pixmap = splash_pixmap.scaled(splash_width, splash_height,
                                              QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                              QtCore.Qt.TransformationMode.SmoothTransformation)
     splash_screen = QtWidgets.QSplashScreen(splash_pixmap)
