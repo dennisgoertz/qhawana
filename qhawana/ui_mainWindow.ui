@@ -762,17 +762,17 @@
   <customwidget>
    <class>FilmStripWidget</class>
    <extends>QListView</extends>
-   <header>Qhawana_main</header>
+   <header>ui</header>
   </customwidget>
   <customwidget>
    <class>ProjectBinWidget</class>
    <extends>QTreeView</extends>
-   <header>Qhawana_main</header>
+   <header>ui</header>
   </customwidget>
   <customwidget>
    <class>SceneTableWidget</class>
    <extends>QTableView</extends>
-   <header>Qhawana_main</header>
+   <header>ui</header>
   </customwidget>
   <customwidget>
    <class>QVideoWidget</class>

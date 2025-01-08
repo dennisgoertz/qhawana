@@ -391,8 +391,7 @@ class Ui_mainWindow_Qhawana(object):
         self.actionAbout_Qhawana.setText(_translate("mainWindow_Qhawana", "About Qhawana"))
         self.actionPreferences.setText(_translate("mainWindow_Qhawana", "Preferences..."))
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from Qhawana_main import FilmStripWidget, ProjectBinWidget, SceneTableWidget
-
+from qhawana.widgets import FilmStripWidget, SceneTableWidget, ProjectBinWidget
 
 if __name__ == "__main__":
     import sys

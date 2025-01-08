@@ -1,1090 +1,25 @@
-from __future__ import annotations
+import gzip
+import json
+import mimetypes
+import os
+import sys
+import qtmodern.styles
 
-import logging
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from _typeshed import SupportsWrite
 
-import PyQt6.QtCore
-import datetime
-import exiftool
 import av
-import gzip
-import hashlib
-import PIL.Image
-import PIL.ImageQt
-import os
-import json
-import mimetypes
-import qtmodern.styles
-import sys
-import traceback
-from enum import IntEnum
-
-from PyQt6 import QtCore, QtGui, QtMultimedia, QtWidgets, QtMultimediaWidgets
-from ui_mainWindow import Ui_mainWindow_Qhawana
-from ui_presenterView import Ui_Form_presenterView
-from ui_multiVisionShow import Ui_Form_multiVisionShow
-
-MV_ICON_SIZE = 100
-MV_PREVIEW_SIZE = 800
-BUF_SIZE = 65536
-
-
-class Scene_Type(IntEnum):
-    EMPTY = 0
-    STILL = 1
-    VIDEO = 2
-
-
-class Show_States(IntEnum):
-    STOPPED = 0
-    RUNNING = 1
-    PAUSED = 2
-    FINISHED = 3
-
-
-class WorkerSignals(QtCore.QObject):
-    finished = QtCore.pyqtSignal()
-    error = QtCore.pyqtSignal(tuple)
-    result = QtCore.pyqtSignal(object)
-    progress = QtCore.pyqtSignal(int)
-
-
-# noinspection PyBroadException
-class Worker(QtCore.QRunnable):
-    def __init__(self, fn, *args, **kwargs):
-        super().__init__()
-
-        # Store constructor arguments (re-used for processing)
-        self.fn = fn
-        self.args = args
-        self.kwargs = kwargs
-        self.signals = WorkerSignals()
-
-        # Add the callback to our kwargs
-        self.kwargs['progress_callback'] = self.signals.progress
-
-    @QtCore.pyqtSlot()
-    def run(self):
-        """
-        Initialise the runner function with passed args, kwargs.
-        """
-
-        # Retrieve args/kwargs here; and fire processing using them
-        try:
-            result = self.fn(*self.args, **self.kwargs)
-        except:
-            traceback.print_exc()
-            exctype, value = sys.exc_info()[:2]
-            self.signals.error.emit((exctype, value, traceback.format_exc()))
-        else:
-            self.signals.result.emit(result)  # Return the result of the processing
-        finally:
-            self.signals.finished.emit()  # Done
-
-
-class Mv_Project(QtCore.QObject):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.mv_show = Mv_Show(self)
-        self.bin = ProjectBinModel(self)
-        self.settings = ProjectSettings(self)
-
-
-class Mv_Show(QtCore.QObject):
-    state_changed = PyQt6.QtCore.pyqtSignal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.sequence = Mv_sequence(parent=self)
-        self.__state = Show_States.STOPPED
-
-    def state(self):
-        return self.__state
-
-    def set_state(self, state: Show_States):
-        states = {Show_States.STOPPED: "stopped",
-                  Show_States.PAUSED: "paused",
-                  Show_States.RUNNING: "running",
-                  Show_States.FINISHED: "finished"}
-        if state != self.__state:
-            self.__state = state
-            self.state_changed.emit(states[state])
-            QtCore.qDebug(f"Changing show state to {states[state]}")
-            return state
-        else:
-            return False
-
-    def length(self):
-        return self.sequence.rowCount()
-
-    def toJson(self, progress_callback):
-        scenes = []
-        num_scenes = self.sequence.rowCount()
-        for i in range(num_scenes):
-            item = self.sequence.item(i)
-            scene_data = item.toJson(store_pixmap=True)
-            scenes.append(scene_data)
-            progress_callback.emit((i + 1) // num_scenes * 100)
-        json_string = {"scenes": scenes}
-        return json_string
-
-    def fromJson(self, json_string: dict, progress_callback):
-        self.sequence.clear()
-        self.set_state(Show_States.STOPPED)
-        num_scenes = len(json_string)
-        for i, s in enumerate(json_string):
-            progress_callback.emit((i + 1) // num_scenes * 100)
-            scene = Mv_Scene.fromJson(s)
-            self.sequence.appendRow(scene)
-
-    def getModel(self):
-        return self.sequence
-
-    def getScene(self, index=0):
-        return self.sequence.item(index) if 0 <= index < self.length() else False
-
-
-class Mv_sequence(QtCore.QAbstractTableModel):
-    # sequence is a list of QStandardItems with UUIDs referring to a Mv_Scene object
-    _sequence = []
-
-    # scenes is a dict of Mv_Scene objects with a UUID as the key
-    _scenes = {}
-
-    # horizontal_headers is a list of strings
-    _horizontal_headers = []
-
-    def __init__(self, parent=None):
-        super().__init__(parent=parent)
-        self.setHorizontalHeaderLabels(["Visual source", "Audio source", "Capture Time",
-                                        "Duration", "In Point", "Out Point"])
-
-    def data(self, index, role=...):
-        if not (index.isValid() and index.row() <= self.rowCount()):
-            QtCore.qWarning("Invalid index for sequence")
-            return False
-        item: QtGui.QStandardItem = self._sequence[index.row()]
-        item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        if item_uuid is None or item_uuid.isNull():
-            # This happens when data() is requested for an empty item
-            QtCore.qWarning(f"Item {index.row()} in sequence does not have a valid UUID")
-            return False
-        if item_uuid not in self._scenes:
-            QtCore.qWarning(f"Scene for item in sequence with UUID {item_uuid} not found")
-            return False
-        item_data: Mv_Scene = self._scenes[item_uuid]
-        if item_data is None:
-            QtCore.qWarning(f"Scene for item in sequence with UUID {item_uuid} is empty")
-            return False
-        if role == QtCore.Qt.ItemDataRole.UserRole:
-            return item_data
-        elif index.column() == 0:
-            if role == QtCore.Qt.ItemDataRole.DisplayRole:
-                if item_data.exif:
-                    return item_data.exif["File:FileName"]
-                else:
-                    return item_data.source
-            elif role == QtCore.Qt.ItemDataRole.DecorationRole:
-                return item_data.icon
-        elif index.column() == 1:
-            if role == QtCore.Qt.ItemDataRole.DisplayRole or role == QtCore.Qt.ItemDataRole.ToolTipRole:
-                return item_data.audio_source
-        elif index.column() == 2:
-            if role == QtCore.Qt.ItemDataRole.DisplayRole:
-                if item_data.exif:
-                    if "EXIF:CreateDate" in item_data.exif:
-                        return item_data.exif["EXIF:CreateDate"]
-                    elif "QuickTime:CreateDate" in item_data.exif:
-                        return item_data.exif["QuickTime:CreateDate"]
-        elif index.column() == 3:
-            if role == QtCore.Qt.ItemDataRole.DisplayRole:
-                if item_data.duration > 0:
-                    return timeStringFromMsec(item_data.duration)
-                elif item_data.duration == 0:
-                    return "(stop)"
-                elif item_data.duration == -1:
-                    return "(default)"
-            elif role == QtCore.Qt.ItemDataRole.SizeHintRole:
-                return "0000:00:00 00:00:00"
-        elif index.column() in [4, 5] and item_data.scene_type == Scene_Type.STILL:
-            if role == QtCore.Qt.ItemDataRole.DisplayRole:
-                return ""
-            elif role == QtCore.Qt.ItemDataRole.SizeHintRole:
-                return "000:00.000"
-        elif (index.column() == 4 and
-              role == QtCore.Qt.ItemDataRole.DisplayRole):
-            return timeStringFromMsec(item_data.in_point)
-        elif (index.column() == 4 and
-              role == QtCore.Qt.ItemDataRole.EditRole):
-            return str(item_data.in_point)
-        elif (index.column() == 5 and
-              role == QtCore.Qt.ItemDataRole.DisplayRole):
-            return timeStringFromMsec(item_data.out_point)
-        elif (index.column() == 5 and
-              role == QtCore.Qt.ItemDataRole.EditRole):
-            return str(item_data.out_point)
-
-    def setData(self, index, value, role=...):
-        if role == QtCore.Qt.ItemDataRole.EditRole and index.column() in [4, 5]:
-            item = self._sequence[index.row()]
-            item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
-            if item_uuid is None or item_uuid.isNull():
-                QtCore.qWarning(f"Item {index.row()} in sequence does not have a valid UUID")
-                return False
-            if item_uuid not in self._scenes:
-                QtCore.qWarning(f"Scene for item in sequence with UUID {item_uuid} not found")
-                return False
-            item_data: Mv_Scene = self._scenes[item_uuid]
-
-            if int(value) > item_data.duration or int(value) < 0:
-                return False
-            if index.column() == 4:
-                if int(value) < item_data.out_point:
-                    item_data.in_point = int(value)
-                else:
-                    return False
-            elif index.column() == 5:
-                if int(value) > item_data.in_point:
-                    item_data.out_point = int(value)
-                else:
-                    return False
-
-            self.dataChanged.emit(index, index)
-            return True
-        else:
-            return super().setData(index, value, role)
-
-    def clear(self):
-        self.beginResetModel()
-        self._sequence = []
-        self._scenes = {}
-        self.endResetModel()
-        return True
-
-    def deleteScene(self, index):
-        if index.isValid():
-            self.beginRemoveRows(self.index(index.row(), 0), index.row(), index.row())
-            item = self._sequence.pop(index.row())
-            del self._scenes[item.data(QtCore.Qt.ItemDataRole.UserRole)]
-            self.endRemoveRows()
-            return True
-        else:
-            return False
-
-    def headerData(self, section, orientation, role=...):
-        if role == QtCore.Qt.ItemDataRole.SizeHintRole:
-            return QtCore.QVariant()
-        elif role == QtCore.Qt.ItemDataRole.DisplayRole:
-            if orientation == QtCore.Qt.Orientation.Horizontal:
-                return self._horizontal_headers[section]
-            elif orientation == QtCore.Qt.Orientation.Vertical:
-                return section + 1
-
-    def columnCount(self, parent=...):
-        return len(self._horizontal_headers)
-
-    def rowCount(self, parent=...):
-        return len(self._sequence)
-
-    def sceneCount(self):
-        return len(self._scenes)
-
-    def appendRow(self, item: QtGui.QStandardItem):
-        length = self.rowCount()
-        self.beginInsertRows(self.index(self.rowCount() - 1, 0), length, length)
-        scene = item.data()
-        self._scenes[scene.uuid] = scene
-        item.setData(scene.uuid, QtCore.Qt.ItemDataRole.UserRole)
-        self._sequence.append(item)
-        self.endInsertRows()
-        self.rowsInserted.emit(QtCore.QModelIndex(), length, length)
-
-    def setHorizontalHeaderLabels(self, labels):
-        self._horizontal_headers.clear()
-        for text in labels:
-            self._horizontal_headers.append(text)
-        self.headerDataChanged.emit(QtCore.Qt.Orientation.Horizontal, 0, len(labels) - 1)
-
-    def item(self, row):
-        try:
-            item = self._sequence[row]
-        except IndexError:
-            QtCore.qWarning(f"Sequence item index is out of bounds "
-                            f"(Item {row} requested, sequence has {self.rowCount()} items)")
-            return False
-        item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        if item_uuid is None or item_uuid.isNull():
-            QtCore.qWarning("Item in sequence does not have a valid UUID")
-            return False
-        if item_uuid not in self._scenes:
-            QtCore.qWarning(f"Scene for item in sequence with UUID {item_uuid} not found")
-            return False
-
-        return self._scenes[item_uuid]
-
-    def supportedDragActions(self):
-        return QtCore.Qt.DropAction.MoveAction
-
-    def supportedDropActions(self):
-        return QtCore.Qt.DropAction.MoveAction | QtCore.Qt.DropAction.CopyAction | QtCore.Qt.DropAction.LinkAction
-
-    def insertRows(self, row, count, parent=...):
-        self.beginInsertRows(parent, row, row + count - 1)
-        for r in range(count):
-            QtCore.qInfo(f"inserting row after {row}")
-            self._sequence.insert(row, QtGui.QStandardItem())
-        self.endInsertRows()
-        return True
-
-    def removeRows(self, row, count, parent=...):
-        self.beginRemoveRows(parent, row, row + count - 1)
-        for r in range(count):
-            QtCore.qInfo(f"deleting row {row}")
-            del self._sequence[row]
-        self.endRemoveRows()
-        return True
-
-    def mimeTypes(self):
-        types = super().mimeTypes()
-        types.append("x-application-Qhawana-STILLS")
-        types.append("x-application-Qhawana-AUDIO")
-        types.append("x-application-Qhawana-VIDEO")
-
-        return types
-
-    def mimeData(self, indexes):
-        types = self.mimeTypes()
-
-        encoded = QtCore.QByteArray()
-        stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.WriteOnly)
-        format_type = types[0]
-        mime_data = QtCore.QMimeData()
-
-        for index in indexes:
-            if index.isValid() and len(types) > 0 and index.column() == 0:
-                item: QtGui.QStandardItem = self._sequence[index.row()]
-                item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
-
-                stream << item_uuid
-
-        mime_data.setData(format_type, encoded)
-
-        return mime_data
-
-    def dropMimeData(self, data, action, row, column, parent):
-        QtCore.qDebug(f"Handling {action}")
-        if data.hasFormat("application/x-qabstractitemmodeldatalist"):
-            QtCore.qDebug("Dropping application/x-qabstractitemmodeldatalist")
-            if not data or not action == QtCore.Qt.DropAction.MoveAction:
-                return False
-
-            types = super().mimeTypes()
-            if len(types) == 0:
-                return False
-
-            format_type = types[0]
-
-            if not data.hasFormat(format_type):
-                return False
-
-            encoded = data.data(format_type)
-            stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.ReadOnly)
-
-            # otherwise insert new rows for the data
-            item_uuid = QtCore.QUuid()
-            while not stream.atEnd():
-                stream >> item_uuid
-                self.insertRow(row, parent)
-                QtCore.qDebug(f"Setting UUID {item_uuid.toString()} for inserted item in row {row}")
-                self._sequence[row].setData(item_uuid, QtCore.Qt.ItemDataRole.UserRole)
-                self.setData(self.index(row, column, parent), item_uuid, QtCore.Qt.ItemDataRole.UserRole)
-            return True
-
-        elif data.hasFormat('x-application-Qhawana-STILLS'):
-            QtCore.qDebug("x-application-Qhawana-STILLS")
-
-            return True
-        elif data.hasFormat('x-application-Qhawana-AUDIO'):
-            QtCore.qDebug("x-application-Qhawana-AUDIO")
-
-            encoded = data.data("x-application-Qhawana-AUDIO")
-            stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.ReadOnly)
-
-            item = stream.readQString()
-
-            scene_uuid = self._sequence[row].data(QtCore.Qt.ItemDataRole.UserRole)
-            scene = self._scenes[scene_uuid]
-            scene.audio_source = item
-
-            changed_index = self.index(row, column)
-            self.dataChanged.emit(changed_index, changed_index)
-
-            return True
-        else:
-            return False
-
-    def flags(self, index):
-        default_flags = super().flags(index)
-        if index.isValid():
-            flags = default_flags | QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsDragEnabled
-            scene = self.item(index.row())
-            if index.column() in [4, 5]:
-                if scene and scene.scene_type == Scene_Type.VIDEO:
-                    flags = flags | QtCore.Qt.ItemFlag.ItemIsEditable
-                else:
-                    flags = flags ^ QtCore.Qt.ItemFlag.ItemIsEnabled
-        else:
-            flags = default_flags | QtCore.Qt.ItemFlag.ItemIsDropEnabled
-        return flags
-
-    def sort(self, column, order=...):
-        rev = (order == QtCore.Qt.SortOrder.DescendingOrder)
-        self.beginResetModel()
-        self._sequence.sort(key=lambda x: self.dataFromItemAndColumn(x, column), reverse=rev)
-        self.endResetModel()
-
-    def dataFromItemAndColumn(self, sort_item: QtGui.QStandardItem, column: int) -> str:
-        item_uuid = sort_item.data(QtCore.Qt.ItemDataRole.UserRole)
-
-        scene: Mv_Scene = self._scenes[item_uuid]
-        if column == 0:
-            return scene.source
-        elif column == 2:
-            if scene.exif:
-                if "EXIF:CreateDate" in scene.exif:
-                    return scene.exif["EXIF:CreateDate"]
-                elif "QuickTime:CreateDate" in scene.exif:
-                    return scene.exif["QuickTime:CreateDate"]
-
-        QtCore.qDebug(f"No sort key available for column {column} of scene {item_uuid}")
-        return "0"
-
-    def inheritAudio(self, selection: list[QtCore.QModelIndex]):
-        QtCore.qDebug(f"Received {selection} of {len(selection)} rows")
-        selection.sort(key=lambda x: x.row())
-        audio_source = self.item(selection[0].row()).audio_source
-        if audio_source:
-            for i in selection:
-                QtCore.qDebug(f"Setting audio source {audio_source} to scene {i.row()}")
-                self.item(i.row()).audio_source = audio_source
-
-
-class Mv_Scene(QtGui.QStandardItem):
-    def __init__(self, source: str, scene_type: Scene_Type, audio_source="", pause=False, duration=-1,
-                 in_point=-1, out_point=-1, play_video_audio=False, pixmap=None, notes="", exif=None, parent=None):
-
-        self.uuid = QtCore.QUuid().createUuid()
-        self.source = source
-        self.source_hash = ""
-        self.audio_source = audio_source
-        self.audio_source_hash = ""
-        self.scene_type = scene_type
-        self.pause = pause
-        self.duration = duration
-        self.in_point = in_point
-        self.out_point = out_point
-        self.play_video_audio = play_video_audio
-        self.pixmap = pixmap
-        self.notes = notes
-        self.exif = exif
-
-        if self.source:
-            try:
-                source_hash = getFileHashSHA1(self.source, used_for_security=False)
-            except FileNotFoundError:
-                QtCore.qWarning(f"Source file {self.source} not found for scene {self.uuid.toString()}")
-                pass
-            else:
-                self.source_hash = source_hash
-
-        if self.audio_source:
-            try:
-                audio_source_hash = getFileHashSHA1(self.audio_source, used_for_security=False)
-            except FileNotFoundError:
-                QtCore.qWarning(f"Audio source file {self.audio_source} not found for scene {self.uuid.toString()}")
-                pass
-            else:
-                self.audio_source_hash = audio_source_hash
-
-        self.icon = QtGui.QIcon()
-        self.icon.addPixmap(self.pixmap.scaled(MV_ICON_SIZE, MV_ICON_SIZE,
-                                               QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                               QtCore.Qt.TransformationMode.SmoothTransformation),
-                            QtGui.QIcon.Mode.Normal,
-                            QtGui.QIcon.State.Off)
-
-        super().__init__(parent)
-
-    def __getstate__(self):
-        state = [self.uuid, self.source, self.audio_source, self.scene_type,
-                 self.pause, self.duration, self.notes, self.exif]
-        byte_array = QtCore.QByteArray()
-        stream = QtCore.QDataStream(byte_array, QtCore.QIODevice.OpenModeFlag.WriteOnly)
-        stream << self.pixmap
-        state.append(byte_array)
-        # QtCore.qDebug(f"Serialized Mv_Scene: {state}")
-        return state
-
-    def __setstate__(self, state):
-        self.uuid = state[0]
-        self.source = state[1]
-        self.audio_source = state[2]
-        self.scene_type = state[3]
-        self.pause = state[4]
-        self.duration = state[5]
-        self.notes = state[6]
-        self.exif = state[7]
-        self.pixmap = QtGui.QPixmap()
-        stream = QtCore.QDataStream(state[8], QtCore.QIODevice.OpenModeFlag.ReadOnly)
-        if not stream.atEnd():
-            self.pixmap.loadFromData(stream.readBytes())
-        elif self.source:
-            self.pixmap.load(self.source)
-
-    def toJson(self, store_pixmap=False) -> dict:
-        json_dict = {"source": self.source,
-                     "source_hash": self.source_hash,
-                     "audio_source": self.audio_source,
-                     "audio_source_hash": self.audio_source_hash,
-                     "scene_type": self.scene_type,
-                     "pause": self.pause,
-                     "duration": self.duration,
-                     "in_point": self.in_point,
-                     "out_point": self.out_point,
-                     "play_video_audio": self.play_video_audio,
-                     "notes": self.notes,
-                     "exif": self.exif}
-        if store_pixmap and self.pixmap:
-            json_dict["pixmap"] = jsonValFromPixmap(self.pixmap)
-        else:
-            json_dict["pixmap"] = None
-
-        return json_dict
-
-    def fromJson(json_dict: dict) -> QtGui.QStandardItem:
-        if "pixmap" in json_dict and json_dict["pixmap"]:
-            pixmap = pixmapFromJsonVal(json_dict["pixmap"])
-        else:
-            if json_dict["scene_type"] == Scene_Type.VIDEO:
-                keyframe_image = getKeyframeFromVideo(json_dict["source"])
-                pixmap = QtGui.QPixmap().fromImage(keyframe_image)
-            elif json_dict["scene_type"] == Scene_Type.STILL:
-                pixmap = QtGui.QPixmap(json_dict["source"])
-            else:
-                pixmap = QtGui.QPixmap(100, 100)
-                pixmap.fill(QtGui.QColor("black"))
-        icon = QtGui.QIcon()
-        icon.addPixmap(pixmap.scaled(MV_ICON_SIZE, MV_ICON_SIZE,
-                                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                     QtCore.Qt.TransformationMode.SmoothTransformation),
-                       QtGui.QIcon.Mode.Normal,
-                       QtGui.QIcon.State.Off)
-
-        scene = Mv_Scene(source=json_dict["source"],
-                         scene_type=json_dict["scene_type"],
-                         pixmap=pixmap.scaled(MV_PREVIEW_SIZE, MV_PREVIEW_SIZE,
-                                              QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                              QtCore.Qt.TransformationMode.SmoothTransformation)
-                         )
-
-        if "play_video_audio" in json_dict:
-            scene.play_video_audio = json_dict["play_video_audio"]
-        elif scene.scene_type == Scene_Type.VIDEO:
-            with av.open(scene.source) as container:
-                # Set scene's play_video_audio property to True if the video has an audio stream:
-                scene.play_video_audio = (len(container.streams.audio) > 0)
-        if "audio_source" in json_dict:
-            scene.audio_source = json_dict["audio_source"]
-        if "pause" in json_dict:
-            scene.pause = json_dict["pause"]
-        if "duration" in json_dict:
-            scene.duration = json_dict["duration"]
-        if "in_point" in json_dict:
-            scene.in_point = json_dict["in_point"]
-        if "out_point" in json_dict:
-            scene.out_point = json_dict["out_point"]
-        if "notes" in json_dict:
-            scene.notes = json_dict["notes"]
-        if "exif" in json_dict:
-            scene.exif = json_dict["exif"]
-        if "source_hash" in json_dict:
-            scene.source_hash = json_dict["source_hash"]
-        if "audio_source_hash" in json_dict:
-            scene.audio_source_hash = json_dict["audio_source_hash"]
-
-        item = QtGui.QStandardItem(icon, json_dict["source"])
-        item.setDropEnabled(False)
-        item.setData(scene)
-        return item
-
-
-class FilmStripWidget(QtWidgets.QListView):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-
-class FilmStripItemDelegate(QtWidgets.QStyledItemDelegate):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-    def paint(self, painter, option, index):
-        # model = index.model()
-        self.initStyleOption(option, index)
-        # style = option.widget.style()
-        super().paint(painter, option, index)
-
-
-class SceneTableWidget(QtWidgets.QTableView):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.DefaultContextMenu)
-        self.horizontalHeader().setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.ActionsContextMenu)
-
-    def sortByColumn(self, column, order):
-        popup = QtWidgets.QMessageBox(self)
-        popup.setIcon(QtWidgets.QMessageBox.Icon.Question)
-        popup.setText("Confirm sorting")
-        popup.setInformativeText(f"Would you like to sort by column {column} in {order}?")
-        popup.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes |
-                                 QtWidgets.QMessageBox.StandardButton.No)
-        popup.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
-        popup.setModal(True)
-        answer = popup.exec()
-
-        if answer:
-            super().sortByColumn(column, order)
-
-    def contextMenuEvent(self, e):
-        handled = False
-        index = self.indexAt(e.pos())
-
-        menu = QtWidgets.QMenu()
-        # dummy = QtGui.QAction("Dummy action", menu) # default action for all columns
-
-        if index.column() == 0:
-            action_1 = QtGui.QAction("Delete scene", menu)
-            action_1.triggered.connect(lambda x: self.model().deleteScene(index))
-            menu.addAction(action_1)
-            handled = True
-        elif index.column() == 1:
-            action_2 = QtGui.QAction("Inherit audio from above", menu)
-            selected_rows = []
-            item_selection = self.selectionModel().selection()
-            for selected_index in item_selection.indexes():
-                if selected_index.column() == 0:
-                    selected_rows.append(selected_index)
-            if len(selected_rows) > 1:
-                action_2.triggered.connect(lambda x: self.model().inheritAudio(selected_rows))
-                menu.addAction(action_2)
-            handled = True
-
-        if handled:
-            menu.addSeparator()
-            # menu.addAction(dummy)
-            menu.exec(e.globalPos())
-            e.accept()
-        else:
-            e.ignore()
-
-    def dropEvent(self, e):
-        if e.source() is self:
-            QtCore.qDebug("Internal move")
-        else:
-            QtCore.qDebug("External drop")
-        super().dropEvent(e)
-
-    def dragEnterEvent(self, e):
-        if e.source() is self:
-            QtCore.qDebug(f"Entered internal drag with MIME {str(e.mimeData())}")
-            super().dragEnterEvent(e)
-        else:
-            formats = e.mimeData().formats()
-            QtCore.qDebug(f"Entered external drag from {e.source()} with MIME {e.mimeData().formats()}")
-            if ("x-application-Qhawana-STILLS" in formats or
-                    "x-application-Qhawana-VIDEO" in formats or
-                    "x-application-Qhawana-AUDIO" in formats):
-                e.accept()
-
-    def dragMoveEvent(self, e):
-        if e.source() is self:
-            super().dragMoveEvent(e)
-        else:
-            cursor_pos = self.viewport().mapFromGlobal(QtGui.QCursor().pos())
-            index = self.indexAt(cursor_pos)
-            self.setDragDropOverwriteMode(False)
-
-            formats = e.mimeData().formats()
-            if (index.isValid() and (
-                    ("x-application-Qhawana-STILLS" in formats or
-                     "x-application-Qhawana-VIDEO" in formats) and
-                    index.column() == 0) or
-                    ("x-application-Qhawana-AUDIO" in formats and
-                     index.column() == 1)
-            ):
-                self.setDropIndicatorShown(True)
-                e.accept()
-            else:
-                self.setDropIndicatorShown(False)
-                e.ignore()
-
-
-class SceneTableTextOnlyDelegateCanBeRemoved(QtWidgets.QStyledItemDelegate):
-    def sizeHint(self, option, index):
-        return QtCore.QSize(50, 12)
-
-    def paint(self, painter, option, index):
-        text = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
-
-        text_font = QtGui.QFont(option.font)
-        text_font.setPixelSize(20)
-        fm = QtGui.QFontMetrics(text_font)
-        text_rect = QtCore.QRectF(option.rect)
-        # titleRect.setLeft(iconRect.right())
-        text_rect.setHeight(fm.height())
-
-        color = (
-            option.palette.color(QtGui.QPalette.ColorRole.BrightText)
-            if option.state & QtWidgets.QStyle.StateFlag.State_Selected
-            else option.palette.color(QtGui.QPalette.ColorRole.WindowText)
-        )
-        painter.save()
-        painter.setFont(text_font)
-        pen = painter.pen()
-        pen.setColor(color)
-        painter.setPen(pen)
-        painter.drawText(text_rect, text)
-        painter.restore()
-
-
-class ProjectBinWidget(QtWidgets.QTreeView):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.dragStartPosition = QtCore.QPoint()
-
-    def dragEnterEvent(self, e):
-        QtCore.qDebug(f"Entering drag from {e.source()} ({e.mimeData().formats()})")
-        # cursor_pos = self.viewport().mapFromGlobal(QtGui.QCursor().pos())
-        # selected_index = self.indexAt(cursor_pos)
-        # selected_item = self.model().itemData(selected_index)
-
-        super().dragEnterEvent(e)
-
-    def mousePressEvent(self, e):
-        if e.buttons() == QtCore.Qt.MouseButton.LeftButton:
-            self.dragStartPosition = e.pos()
-        super().mousePressEvent(e)
-
-    '''
-    def mouseMoveEvent(self, e):
-        if e.buttons() == QtCore.Qt.MouseButton.LeftButton:
-            if (e.pos() - self.dragStartPosition).manhattanLength() > QtWidgets.QApplication.startDragDistance():
-                drag = QtGui.QDrag(self)
-                mime = QtCore.QMimeData()
-
-                selected_index = self.selectedIndexes()[0]
-                item = selected_index.model().itemData(selected_index)
-                parent_index = selected_index.parent()
-                if parent_index.model() is not None:
-                    parent_item = parent_index.model().itemData(parent_index)
-                    if parent_item[0] == "STILLS":
-                        mime.setData("x-application-Qhawana-STILLS", b"")
-                    elif parent_item[0] == "VIDEO":
-                        mime.setData("x-application-Qhawana-VIDEO", b"")
-                    elif parent_item[0] == "AUDIO":
-                        mime.setData("x-application-Qhawana-AUDIO",
-                                     bytes(selected_index.model().data(selected_index).encode("utf-8")))
-                    drag.setMimeData(mime)
-                    icon = selected_index.model().data(selected_index, QtCore.Qt.ItemDataRole.DecorationRole)
-                    if type(icon) is QtGui.QIcon:
-                        drag.setPixmap(icon.pixmap(50, 50))
-                    drag.exec(QtCore.Qt.DropAction.LinkAction)
-                    e.accept()
-                else:
-                    parent_item = None
-                    e.ignore()
-                QtCore.qDebug(f"dragging item {item} with parent {parent_item}")
-    '''
-
-
-class ProjectBinModel(QtGui.QStandardItemModel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self.categoryItems = {"STILLS": None, "AUDIO": None, "VIDEO": None}
-
-    def clear(self):
-        super().clear()
-        self.beginResetModel()
-        root = self.invisibleRootItem()
-        for c in self.categoryItems.keys():
-            ci = QtGui.QStandardItem(c)
-            ci.setDragEnabled(False)
-            ci.setDropEnabled(True)
-            self.categoryItems[c] = ci
-            root.appendRow(ci)
-        self.setHorizontalHeaderLabels(["File", "Details"])
-        self.endResetModel()
-
-    def supportedDropActions(self):
-        return QtCore.Qt.DropAction.IgnoreAction
-
-    def supportedDragActions(self):
-        return QtCore.Qt.DropAction.CopyAction | QtCore.Qt.DropAction.LinkAction
-
-    def mimeTypes(self):
-        types = ["x-application-Qhawana-STILLS", "x-application-Qhawana-AUDIO",
-                 "x-application-Qhawana-VIDEO"]
-
-        return types
-
-    def mimeData(self, indexes):
-        types = self.mimeTypes()
-
-        for index in indexes:
-            if index.isValid() and len(types) > 0 and index.column() == 0:
-                mime_data = QtCore.QMimeData()
-                format_type = types[0]
-
-                item = index.model().itemData(index)[QtCore.Qt.ItemDataRole.UserRole]
-                parent_index = index.parent()
-                if parent_index.model() is not None:
-                    parent_item = parent_index.model().itemData(parent_index)[0]
-                    if parent_item == "STILLS":
-                        format_type = "x-application-Qhawana-STILLS"
-                    elif parent_item == "VIDEO":
-                        format_type = "x-application-Qhawana-VIDEO"
-                    elif parent_item == "AUDIO":
-                        format_type = "x-application-Qhawana-AUDIO"
-
-                encoded = QtCore.QByteArray()
-                stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.WriteOnly)
-
-                stream.writeQString(item)
-                mime_data.setData(format_type, encoded)
-
-                return mime_data
-
-    def toJson(self, progress_callback):
-        items = {}
-        item_count = 0
-        cur_item = 0
-
-        for i in range(self.rowCount()):
-            item_count += countRowsOfIndex(self.index(i,0))
-
-        for index, data in forEach(self):
-            if index:
-                items[index.data()] = []
-                for i, d in forEach(self, index):
-                    cur_item += 1
-                    items[index.data()].append(d)
-                    progress_callback.emit(cur_item // item_count * 100)
-
-        json_string = {"project_bin": items}
-
-        return json_string
-
-    def fromJson(self, json_string: dict, progress_callback):
-        num_items = 0
-        for items in json_string.values():
-            num_items += len(items)
-
-        self.beginResetModel()
-        self.removeRows(0, self.rowCount())
-
-        self.clear()
-
-        cur_item = 0
-        for category, items in json_string.items():
-            for v in items:
-                cur_item += 1
-                progress_callback.emit(cur_item // num_items * 100)
-
-                file = os.path.basename(v)
-                bin_item = QtGui.QStandardItem(file)
-                pixmap = None
-
-                if category == "AUDIO":
-                    pixmap = QtGui.QPixmap(MV_ICON_SIZE, MV_ICON_SIZE)
-                    pixmap.fill(QtGui.QColor("black"))
-                elif category == "STILLS":
-                    pixmap = QtGui.QPixmap(v).scaled(MV_ICON_SIZE, MV_ICON_SIZE,
-                                                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                                     QtCore.Qt.TransformationMode.FastTransformation)
-                elif category == "VIDEO":
-                    keyframe_image = getKeyframeFromVideo(v)
-                    pixmap = (QtGui.QPixmap().fromImage(keyframe_image).
-                              scaled(MV_ICON_SIZE, MV_ICON_SIZE,
-                                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                     QtCore.Qt.TransformationMode.FastTransformation))
-
-                if pixmap:
-                    tooltip_image = jsonValFromPixmap(pixmap)
-                    html = f'<img src="data:image/png;base64,{tooltip_image}">'
-                    bin_item.setData(html, QtCore.Qt.ItemDataRole.ToolTipRole)
-
-                bin_item.setData(v, QtCore.Qt.ItemDataRole.UserRole)
-                self.categoryItems[category].appendRow(bin_item)
-
-        self.endResetModel()
-
-
-def forEach(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):
-    for r in range(0, model.rowCount(parent)):
-        index = model.index(r, 0, parent)
-        data = model.data(index, QtCore.Qt.ItemDataRole.UserRole)
-
-        if model.hasChildren(index):
-            yield index, data
-        else:
-            yield None, data
-
-def countRowsOfIndex(index = QtCore.QModelIndex()):
-    count: int = 0
-    model: QtCore.QAbstractItemModel = index.model()
-    if model is None:
-        return 0
-    row_count: int = model.rowCount(index)
-    count += row_count
-    for r in range(row_count):
-        count += countRowsOfIndex(model.index(r, 0, index))
-    return count
-
-
-class BinItem(QtGui.QStandardItem):
-    def __init__(self, *__args):
-        super().__init__()
-
-
-class ProjectSettings(QtCore.QObject):
-    valueChanged = QtCore.pyqtSignal(str, QtCore.QVariant, name="valueChanged")
-
-    def __init__(self, parent=None):
-        self.__settings = {"transition_time": 1000, "default_delay": 5000}
-        super().__init__(parent)
-
-    def toJson(self) -> {str}:
-        return {"settings": json.dumps(self.__settings)}
-
-    def fromJson(self, json_string: {str}):
-        for setting, value in json.loads(json_string).items():
-            self.setProperty(setting, value)
-
-    def getProperty(self, property_name: str):
-        try:
-            return self.__settings[property_name]
-        except KeyError:
-            return None
-
-    def setProperty(self, property_name: str, value: QtCore.QVariant) -> bool:
-        old_value = self.getProperty(property_name)
-        if old_value == value:
-            return False
-        try:
-            self.__settings[property_name] = value
-        except (TypeError, ValueError):
-            return False
-        else:
-            QtCore.qDebug(f'Setting "{property_name}" from "{old_value}" to "{value}"')
-            self.valueChanged.emit(property_name, value)
-            return True
-
-
-def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
-    if scene:
-        if type(scene.pixmap) is QtGui.QPixmap:
-            pixmap = scene.pixmap
-        else:
-            if scene.scene_type == Scene_Type.STILL:
-                pixmap = QtGui.QPixmap(scene.source)
-            elif scene.scene_type == Scene_Type.VIDEO:
-                image = getKeyframeFromVideo(scene.source)
-                pixmap = QtGui.QPixmap().fromImage(image)
-            else:
-                pixmap = QtGui.QPixmap(100, 100)
-                pixmap.fill(QtGui.QColor("black"))
-    else:
-        pixmap = QtGui.QPixmap(100, 100)
-        pixmap.fill(QtGui.QColor("black"))
-
-    return pixmap
-
-
-def scalePixmapToWidget(widget: QtWidgets.QWidget,
-                        pixmap: QtGui.QPixmap,
-                        mode=QtCore.Qt.TransformationMode.FastTransformation):
-    scaled_pixmap = pixmap.scaled(
-        widget.size(),
-        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-        mode)
-
-    return scaled_pixmap
-
-
-def getKeyframeFromVideo(path) -> QtGui.QImage:
-    with av.open(path) as container:
-        stream = container.streams.video[0]
-        stream.codec_context.skip_frame = "NONKEY"
-        container.streams.video[0].thread_type = "AUTO"
-
-        # Get the first keyframe for the video and convert it to a QImage
-        keyframe = next(container.decode(stream))
-        # noinspection PyTypeChecker
-        image: QtGui.QImage = PIL.ImageQt.ImageQt(keyframe.to_image())
-
-        # Use convertTo to detach image from original buffer before returning
-        image.convertTo(QtGui.QImage.Format.Format_RGB888)
-
-    return image
-
-
-def get_supported_mime_types() -> list:
-    result = []
-    for f in QtMultimedia.QMediaFormat().supportedFileFormats(QtMultimedia.QMediaFormat.ConversionMode.Decode):
-        mime_type = QtMultimedia.QMediaFormat(f).mimeType()
-        result.append(mime_type.name())
-    return result
-
-
-def jsonValFromPixmap(pixmap: QtGui.QPixmap) -> str:
-    buf = QtCore.QBuffer()
-    pixmap.save(buf, "PNG")
-
-    ba1 = buf.data().toBase64()
-
-    decoder = QtCore.QStringDecoder(QtCore.QStringDecoder.Encoding.Latin1)
-
-    return decoder(ba1)
-
-
-def pixmapFromJsonVal(val: str) -> QtGui.QPixmap:
-    encoded = val.encode('latin-1')
-
-    pixmap = QtGui.QPixmap()
-    pixmap.loadFromData(QtCore.QByteArray.fromBase64(encoded), "PNG")
-
-    return pixmap
-
-
-def timeStringFromMsec(msec: int):
-    minutes = msec // 60000
-    seconds = (msec // 1000) % 60
-    milliseconds = msec % 1000
-
-    return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
-
-def getFileHashSHA1(path: str, used_for_security=True):
-    file_sha1 = hashlib.sha1(usedforsecurity=used_for_security)
-    with open(path, 'rb') as f:
-        while True:
-            data = f.read(BUF_SIZE)
-            if not data:
-                break
-            file_sha1.update(data)
-
-    return file_sha1.hexdigest()
+import exiftool
+from PyQt6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets
+
+from qhawana.const import Constants, Scene_Type, Show_States
+from qhawana.model import Mv_Project, Mv_Scene
+from qhawana.ui_mainWindow import Ui_mainWindow_Qhawana
+from qhawana.ui_multiVisionShow import Ui_Form_multiVisionShow
+from qhawana.ui_presenterView import Ui_Form_presenterView
+from qhawana.utils import get_supported_mime_types, getKeyframeFromVideo, scalePixmapToWidget, timeStringFromMsec
+from qhawana.worker import Worker
 
 
 class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
@@ -1127,8 +62,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.tableView_scenes.setAcceptDrops(True)
         self.tableView_scenes.setSortingEnabled(True)
 
-        bin_model = self.project.bin
-        self.treeView.setModel(bin_model)
+        self.treeView.setModel(self.project.bin)
         self.treeView.header().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
         self.threadpool = QtCore.QThreadPool().globalInstance()
@@ -1171,9 +105,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.spinBox_defaultDelay.valueChanged.connect(
             lambda x: self.project.settings.setProperty("default_delay", x))
 
-        self.FilmStripDelegate = FilmStripItemDelegate()
-        # self.listView_filmStrip.setItemDelegate(self.FilmStripDelegate)
-
     def resizeEvent(self, event):
         # Override QMainWindow's resizeEvent handler to
         # repaint the scene preview if the window size has changed
@@ -1181,7 +112,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         QtWidgets.QMainWindow.resizeEvent(self, event)
 
     def closeEvent(self, event):
-        # Override the closeEvent handler of QMainwindow to
+        # Override QMainWindow's closeEvent handler to
         # ignore the close event and call quitProject instead to handle unsaved changes
         event.ignore()
         self.quitProject()
@@ -1309,16 +240,15 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             json.dump(settings | project_bin | show, f)
 
     def loadProjectFromFile(self, file_name, progress_callback):
-        QtCore.qInfo(f"{datetime.datetime.now()} Loading project from file {file_name}")
+        QtCore.qInfo(f"Loading project from file {file_name}")
 
         try:
             with gzip.open(file_name, 'r') as f:
                 json_string = json.load(f)
         except gzip.BadGzipFile:
-            with open(file_name, 'r') as f:
+            with open(file_name) as f:
                 json_string = json.load(f)
 
-        print(f"{datetime.datetime.now()} Loading settings")
         if "settings" in json_string:
             QtCore.qDebug(f"Loading project settings {json_string['settings']}")
             self.project.settings.fromJson(json_string["settings"])
@@ -1327,16 +257,14 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             if self.project.settings.getProperty("transition_time"):
                 self.spinBox_transitionTime.setValue(self.project.settings.getProperty("transition_time"))
 
-        print(f"{datetime.datetime.now()} Loading bin")
         if "project_bin" in json_string:
             self.project.bin.fromJson(json_string["project_bin"], progress_callback)
 
-        print(f"{datetime.datetime.now()} Loading scenes")
         if "scenes" in json_string:
             QtCore.qDebug(f"Loading {len(json_string['scenes'])} scenes")
             self.mv_show.fromJson(json_string["scenes"], progress_callback)
 
-        QtCore.qInfo(f"{datetime.datetime.now()} Project loaded from file {file_name}")
+        QtCore.qInfo(f"Project loaded from file {file_name}")
 
         self.save_file = file_name
         self.changes_saved = True
@@ -1359,7 +287,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         num_files = len(directory)
 
         for index, file in enumerate(directory):
-            progress_callback.emit(int((index + 1) * 100 / num_files))
+            progress_callback.emit((index + 1) // num_files * 100)
 
             path = os.path.join(dir_name, file)
 
@@ -1385,16 +313,11 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             if mimetype.startswith("image/"):
                 audio_path = ""
                 pixmap = QtGui.QPixmap(path)
-                # try:
-                #     pil_image = PIL.Image.open(path)
-                #     exif_tags = pil_image.getexif()
-                # except PIL.UnidentifiedImageError:
-                #     exif_tags = []
 
                 exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
                 scene = Mv_Scene(source=path,
                                  audio_source=audio_path,
-                                 pixmap=pixmap.scaled(MV_PREVIEW_SIZE, MV_PREVIEW_SIZE,
+                                 pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
                                                       QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                                       QtCore.Qt.TransformationMode.SmoothTransformation),
                                  scene_type=Scene_Type.STILL,
@@ -1429,7 +352,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
                 exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
                 scene = Mv_Scene(source=path,
-                                 pixmap=pixmap.scaled(MV_PREVIEW_SIZE, MV_PREVIEW_SIZE,
+                                 pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
                                                       QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                                       QtCore.Qt.TransformationMode.SmoothTransformation),
                                  scene_type=Scene_Type.VIDEO,
@@ -1464,7 +387,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 # Audio items will only be added to the project bin, but no scene item will be created, so continue:
                 continue
             else:
-                QtCore.qInfo(f"File {file.encode('utf-8', 'ignore')} ({mimetype}) is not supported.")
+                QtCore.qInfo(f"File {file.encode(errors='ignore')} ({mimetype}) is not supported.")
                 # Files with MIME types that we do not understand will be ignored, so continue:
                 continue
 
@@ -1502,11 +425,10 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             dialog.setText("Please add scenes first.")
             dialog.exec()
 
-
     def showBinPreview(self, selection):
-        if type(selection) == QtCore.QItemSelection and len(selection.indexes()) > 0:
+        if isinstance(selection, QtCore.QItemSelection) and len(selection.indexes()) > 0:
             bin_index = selection.indexes()[0]
-        elif type(selection) == QtCore.QModelIndex:
+        elif isinstance(selection, QtCore.QModelIndex):
             bin_index = selection
         else:
             return
@@ -1548,11 +470,10 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         else:
             QtCore.qDebug("Invalid index, not showing preview")
 
-
     def showScenePreview(self, selection):
-        if type(selection) == QtCore.QItemSelection and len(selection.indexes()) > 0:
+        if isinstance(selection, QtCore.QItemSelection) and len(selection.indexes()) > 0:
             scene_index = selection.indexes()[0]
-        elif type(selection) == QtCore.QModelIndex:
+        elif isinstance(selection, QtCore.QModelIndex):
             scene_index = selection
         else:
             return
@@ -1904,7 +825,6 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             self.mv.audioPlayer.stop()
             self.mv.audioPlayer.setSource(QtCore.QUrl())
 
-
     def startShow(self):
         state = self.parent.mv_show.state()
         try:
@@ -2091,28 +1011,53 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.videoPlayer.play()
 
 
-if __name__ == "__main__":
-    av.logging.set_level(logging.ERROR)
-    app = QtWidgets.QApplication(sys.argv)
+def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
+    if scene:
+        if type(scene.pixmap) is QtGui.QPixmap:
+            pixmap = scene.pixmap
+        else:
+            if scene.scene_type == Scene_Type.STILL:
+                pixmap = QtGui.QPixmap(scene.source)
+            elif scene.scene_type == Scene_Type.VIDEO:
+                image = getKeyframeFromVideo(scene.source)
+                pixmap = QtGui.QPixmap().fromImage(image)
+            else:
+                pixmap = QtGui.QPixmap(100, 100)
+                pixmap.fill(QtGui.QColor("black"))
+    else:
+        pixmap = QtGui.QPixmap(100, 100)
+        pixmap.fill(QtGui.QColor("black"))
 
-    splash_width = app.primaryScreen().geometry().width() // 2
-    splash_height = app.primaryScreen().geometry().height() // 2
-    splash_pixmap = QtGui.QPixmap("assets/Qhawana_Logo.png")
-    if splash_pixmap.width() > splash_width or splash_pixmap.height() > splash_height:
-        splash_pixmap = splash_pixmap.scaled(splash_width, splash_height,
-                                             QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                             QtCore.Qt.TransformationMode.SmoothTransformation)
-    splash_screen = QtWidgets.QSplashScreen(splash_pixmap)
-    splash_screen.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-    splash_screen.show()
+    return pixmap
 
-    qtmodern.styles.dark(app)
 
-    ui = Ui_mainWindow()
-    splash_screen.finish(ui)
+def launcher(args, show_splash=True):
+    if show_splash:
+        splash_screen.show()
+        splash_screen.finish(ui)
 
-    if len(sys.argv) > 1:
-        ui.loadFromFile(sys.argv[1])
+    if len(args) > 1:
+        ui.loadFromFile(args[1])
 
     ui.show()
-    sys.exit(app.exec())
+    app.exec()
+
+
+app = QtWidgets.QApplication(sys.argv)
+qtmodern.styles.dark(app)
+
+splash_width = app.primaryScreen().geometry().width() // 2
+splash_height = app.primaryScreen().geometry().height() // 2
+splash_pixmap = QtGui.QPixmap("assets/Qhawana_Logo.png")
+
+if splash_pixmap.width() > splash_width or splash_pixmap.height() > splash_height:
+    splash_pixmap = splash_pixmap.scaled(splash_width, splash_height,
+                                         QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                         QtCore.Qt.TransformationMode.SmoothTransformation)
+splash_screen = QtWidgets.QSplashScreen(splash_pixmap)
+splash_screen.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+
+ui = Ui_mainWindow()
+
+if __name__ == "__main__":
+    sys.exit(launcher(sys.argv))
