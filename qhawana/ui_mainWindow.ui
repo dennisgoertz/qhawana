@@ -471,16 +471,6 @@
         </property>
        </widget>
       </item>
-      <item row="0" column="0">
-       <widget class="QRadioButton" name="radioButton_changes">
-        <property name="enabled">
-         <bool>false</bool>
-        </property>
-        <property name="text">
-         <string>Changes</string>
-        </property>
-       </widget>
-      </item>
       <item row="2" column="2">
        <widget class="QPushButton" name="pushButton_mediaSourceDirectory">
         <property name="sizePolicy">
@@ -656,6 +646,41 @@
         </property>
        </widget>
       </item>
+      <item row="0" column="2">
+       <widget class="QRadioButton" name="radioButton_changes">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Changes</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="0">
+       <widget class="QLabel" name="label_applicationIcon">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>96</width>
+          <height>96</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>96</width>
+          <height>96</height>
+         </size>
+        </property>
+        <property name="text">
+         <string/>
+        </property>
+       </widget>
+      </item>
      </layout>
     </item>
    </layout>
@@ -762,17 +787,17 @@
   <customwidget>
    <class>FilmStripWidget</class>
    <extends>QListView</extends>
-   <header>ui</header>
+   <header>widgets</header>
   </customwidget>
   <customwidget>
    <class>ProjectBinWidget</class>
    <extends>QTreeView</extends>
-   <header>ui</header>
+   <header>widgets</header>
   </customwidget>
   <customwidget>
    <class>SceneTableWidget</class>
    <extends>QTableView</extends>
-   <header>ui</header>
+   <header>widgets</header>
   </customwidget>
   <customwidget>
    <class>QVideoWidget</class>

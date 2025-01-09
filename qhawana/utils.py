@@ -1,4 +1,5 @@
 import hashlib
+from typing import Optional
 
 import PIL.ImageQt
 import av
@@ -6,7 +7,7 @@ import av
 from PyQt6 import QtCore, QtWidgets, QtGui, QtMultimedia
 
 
-def forEach(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):
+def forEachItemInModel(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):
     for r in range(0, model.rowCount(parent)):
         index = model.index(r, 0, parent)
         data = model.data(index, QtCore.Qt.ItemDataRole.UserRole)
@@ -40,19 +41,26 @@ def scalePixmapToWidget(widget: QtWidgets.QWidget,
     return scaled_pixmap
 
 
-def getKeyframeFromVideo(path) -> QtGui.QImage:
+def getKeyframeFromVideo(path) -> Optional[QtGui.QImage]:
     with av.open(path) as container:
+        if len(container.streams.video) == 0:
+            QtCore.qWarning(f"File {path} does not contain a video stream")
+            return
+
         stream = container.streams.video[0]
         stream.codec_context.skip_frame = "NONKEY"
         container.streams.video[0].thread_type = "AUTO"
 
         # Get the first keyframe for the video and convert it to a QImage
-        keyframe = next(container.decode(stream))
-        # noinspection PyTypeChecker
-        image: QtGui.QImage = PIL.ImageQt.ImageQt(keyframe.to_image())
-
-        # Use convertTo to detach image from original buffer before returning
-        image.convertTo(QtGui.QImage.Format.Format_RGB888)
+        try:
+            keyframe = next(container.decode(stream))
+            # noinspection PyTypeChecker
+            image: QtGui.QImage = PIL.ImageQt.ImageQt(keyframe.to_image())
+        except StopIteration:
+            QtCore.qWarning(f"Could not extract keyframe from file {path}")
+        else:
+            # Use convertTo to detach image from original buffer before returning
+            image.convertTo(QtGui.QImage.Format.Format_RGB888)
 
     return image
 

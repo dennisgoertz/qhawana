@@ -220,10 +220,6 @@ class Ui_mainWindow_Qhawana(object):
         self.listView_filmStrip.setUniformItemSizes(True)
         self.listView_filmStrip.setObjectName("listView_filmStrip")
         self.gridLayout.addWidget(self.listView_filmStrip, 9, 0, 1, 8)
-        self.radioButton_changes = QtWidgets.QRadioButton(parent=self.centralwidget)
-        self.radioButton_changes.setEnabled(False)
-        self.radioButton_changes.setObjectName("radioButton_changes")
-        self.gridLayout.addWidget(self.radioButton_changes, 0, 0, 1, 1)
         self.pushButton_mediaSourceDirectory = QtWidgets.QPushButton(parent=self.centralwidget)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         sizePolicy.setHorizontalStretch(0)
@@ -305,6 +301,21 @@ class Ui_mainWindow_Qhawana(object):
         self.pushButton_startShow.setSizePolicy(sizePolicy)
         self.pushButton_startShow.setObjectName("pushButton_startShow")
         self.gridLayout.addWidget(self.pushButton_startShow, 10, 6, 1, 2)
+        self.radioButton_changes = QtWidgets.QRadioButton(parent=self.centralwidget)
+        self.radioButton_changes.setEnabled(False)
+        self.radioButton_changes.setObjectName("radioButton_changes")
+        self.gridLayout.addWidget(self.radioButton_changes, 0, 2, 1, 1)
+        self.label_applicationIcon = QtWidgets.QLabel(parent=self.centralwidget)
+        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.label_applicationIcon.sizePolicy().hasHeightForWidth())
+        self.label_applicationIcon.setSizePolicy(sizePolicy)
+        self.label_applicationIcon.setMinimumSize(QtCore.QSize(96, 96))
+        self.label_applicationIcon.setMaximumSize(QtCore.QSize(96, 96))
+        self.label_applicationIcon.setText("")
+        self.label_applicationIcon.setObjectName("label_applicationIcon")
+        self.gridLayout.addWidget(self.label_applicationIcon, 0, 0, 1, 1)
         self.horizontalLayout.addLayout(self.gridLayout)
         mainWindow_Qhawana.setCentralWidget(self.centralwidget)
         self.menubar = QtWidgets.QMenuBar(parent=mainWindow_Qhawana)
@@ -366,7 +377,6 @@ class Ui_mainWindow_Qhawana(object):
         self.pushButton_inPoint.setText(_translate("mainWindow_Qhawana", "In"))
         self.label_applicationName.setText(_translate("mainWindow_Qhawana", "Qhawana"))
         self.textEdit_notes.setPlaceholderText(_translate("mainWindow_Qhawana", "Notes"))
-        self.radioButton_changes.setText(_translate("mainWindow_Qhawana", "Changes"))
         self.pushButton_mediaSourceDirectory.setText(_translate("mainWindow_Qhawana", "browse..."))
         self.label_transitionTime.setText(_translate("mainWindow_Qhawana", "Transition time:"))
         self.label_defaultDelay.setText(_translate("mainWindow_Qhawana", "Default delay:"))
@@ -374,6 +384,7 @@ class Ui_mainWindow_Qhawana(object):
         self.spinBox_defaultDelay.setSuffix(_translate("mainWindow_Qhawana", " ms"))
         self.label_settingsHeader.setText(_translate("mainWindow_Qhawana", "Multi Vision Show settings:"))
         self.pushButton_startShow.setText(_translate("mainWindow_Qhawana", "Open presenter view..."))
+        self.radioButton_changes.setText(_translate("mainWindow_Qhawana", "Changes"))
         self.menupyMultiVision.setTitle(_translate("mainWindow_Qhawana", "File"))
         self.menuSettings.setTitle(_translate("mainWindow_Qhawana", "Settings"))
         self.menuHelp.setTitle(_translate("mainWindow_Qhawana", "Help"))
@@ -391,7 +402,8 @@ class Ui_mainWindow_Qhawana(object):
         self.actionAbout_Qhawana.setText(_translate("mainWindow_Qhawana", "About Qhawana"))
         self.actionPreferences.setText(_translate("mainWindow_Qhawana", "Preferences..."))
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from qhawana.widgets import FilmStripWidget, SceneTableWidget, ProjectBinWidget
+from widgets import FilmStripWidget, ProjectBinWidget, SceneTableWidget
+
 
 if __name__ == "__main__":
     import sys

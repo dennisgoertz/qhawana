@@ -6,7 +6,8 @@ import av
 from PyQt6 import QtCore, QtGui
 
 from qhawana.const import Constants, Scene_Type, Show_States
-from qhawana.utils import timeStringFromMsec, getFileHashSHA1, countRowsOfIndex, forEach, getKeyframeFromVideo
+from qhawana.utils import (timeStringFromMsec, getFileHashSHA1, countRowsOfIndex, forEachItemInModel,
+                           getKeyframeFromVideo)
 
 
 class Mv_Project(QtCore.QObject):
@@ -28,7 +29,7 @@ class Mv_Show(QtCore.QObject):
     def state(self):
         return self.__state
 
-    def set_state(self, state: Show_States):
+    def set_state(self, state: Show_States) -> bool:
         states = {Show_States.STOPPED: "stopped",
                   Show_States.PAUSED: "paused",
                   Show_States.RUNNING: "running",
@@ -37,14 +38,14 @@ class Mv_Show(QtCore.QObject):
             self.__state = state
             self.state_changed.emit(states[state])
             QtCore.qDebug(f"Changing show state to {states[state]}")
-            return state
+            return True
         else:
             return False
 
-    def length(self):
+    def length(self) -> int:
         return self.sequence.rowCount()
 
-    def toJson(self, progress_callback):
+    def toJson(self, progress_callback) -> dict[str, list]:
         scenes = []
         num_scenes = self.sequence.rowCount()
         for i in range(num_scenes):
@@ -55,7 +56,7 @@ class Mv_Show(QtCore.QObject):
         json_string = {"scenes": scenes}
         return json_string
 
-    def fromJson(self, json_string: dict, progress_callback):
+    def fromJson(self, json_string: dict, progress_callback) -> None:
         self.sequence.clear()
         self.set_state(Show_States.STOPPED)
         num_scenes = len(json_string)
@@ -63,9 +64,6 @@ class Mv_Show(QtCore.QObject):
             progress_callback.emit((i + 1) // num_scenes * 100)
             scene = sceneItemFromJson(s)
             self.sequence.appendRow(scene)
-
-    def getModel(self):
-        return self.sequence
 
     def getScene(self, index=0):
         return self.sequence.item(index) if 0 <= index < self.length() else False
@@ -92,17 +90,21 @@ class Mv_sequence(QtCore.QAbstractTableModel):
             return False
         item: QtGui.QStandardItem = self._sequence[index.row()]
         item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
+
         if item_uuid is None or item_uuid.isNull():
             # This happens when data() is requested for an empty item
             QtCore.qWarning(f"Item {index.row()} in sequence does not have a valid UUID")
             return False
+
         if item_uuid not in self._scenes:
             QtCore.qWarning(f"Scene for item in sequence with UUID {item_uuid} not found")
             return False
+
         item_data: Mv_Scene = self._scenes[item_uuid]
         if item_data is None:
             QtCore.qWarning(f"Scene for item in sequence with UUID {item_uuid} is empty")
             return False
+
         if role == QtCore.Qt.ItemDataRole.UserRole:
             return item_data
         elif index.column() == 0:
@@ -138,20 +140,16 @@ class Mv_sequence(QtCore.QAbstractTableModel):
                 return ""
             elif role == QtCore.Qt.ItemDataRole.SizeHintRole:
                 return "000:00.000"
-        elif (index.column() == 4 and
-              role == QtCore.Qt.ItemDataRole.DisplayRole):
+        elif index.column() == 4 and role == QtCore.Qt.ItemDataRole.DisplayRole:
             return timeStringFromMsec(item_data.in_point)
-        elif (index.column() == 4 and
-              role == QtCore.Qt.ItemDataRole.EditRole):
+        elif index.column() == 4 and role == QtCore.Qt.ItemDataRole.EditRole:
             return str(item_data.in_point)
-        elif (index.column() == 5 and
-              role == QtCore.Qt.ItemDataRole.DisplayRole):
+        elif index.column() == 5 and role == QtCore.Qt.ItemDataRole.DisplayRole:
             return timeStringFromMsec(item_data.out_point)
-        elif (index.column() == 5 and
-              role == QtCore.Qt.ItemDataRole.EditRole):
+        elif index.column() == 5 and role == QtCore.Qt.ItemDataRole.EditRole:
             return str(item_data.out_point)
 
-    def setData(self, index, value, role=...):
+    def setData(self, index, value, role=...) -> bool:
         if role == QtCore.Qt.ItemDataRole.EditRole and index.column() in [4, 5]:
             item = self._sequence[index.row()]
             item_uuid = item.data(QtCore.Qt.ItemDataRole.UserRole)
@@ -181,14 +179,13 @@ class Mv_sequence(QtCore.QAbstractTableModel):
         else:
             return super().setData(index, value, role)
 
-    def clear(self):
+    def clear(self) -> None:
         self.beginResetModel()
         self._sequence = []
         self._scenes = {}
         self.endResetModel()
-        return True
 
-    def deleteScene(self, index):
+    def deleteScene(self, index) -> bool:
         if index.isValid():
             self.beginRemoveRows(self.index(index.row(), 0), index.row(), index.row())
             item = self._sequence.pop(index.row())
@@ -207,13 +204,13 @@ class Mv_sequence(QtCore.QAbstractTableModel):
             elif orientation == QtCore.Qt.Orientation.Vertical:
                 return section + 1
 
-    def columnCount(self, parent=...):
+    def columnCount(self, parent=...) -> int:
         return len(self._horizontal_headers)
 
-    def rowCount(self, parent=...):
+    def rowCount(self, parent=...) -> int:
         return len(self._sequence)
 
-    def sceneCount(self):
+    def sceneCount(self) -> int:
         return len(self._scenes)
 
     def appendRow(self, item: QtGui.QStandardItem):
@@ -271,7 +268,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
         self.endRemoveRows()
         return True
 
-    def mimeTypes(self):
+    def mimeTypes(self) -> list[str]:
         types = super().mimeTypes()
         types.append("x-application-Qhawana-STILLS")
         types.append("x-application-Qhawana-AUDIO")
@@ -279,7 +276,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
         return types
 
-    def mimeData(self, indexes):
+    def mimeData(self, indexes) -> QtCore.QMimeData:
         types = self.mimeTypes()
 
         encoded = QtCore.QByteArray()
@@ -298,7 +295,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
         return mime_data
 
-    def dropMimeData(self, data, action, row, column, parent):
+    def dropMimeData(self, data, action, row, column, parent) -> bool:
         QtCore.qDebug(f"Handling {action}")
         if data.hasFormat("application/x-qabstractitemmodeldatalist"):
             QtCore.qDebug("Dropping application/x-qabstractitemmodeldatalist")
@@ -350,7 +347,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
         else:
             return False
 
-    def flags(self, index):
+    def flags(self, index) -> QtCore.Qt.ItemFlag:
         default_flags = super().flags(index)
         if index.isValid():
             flags = default_flags | QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsDragEnabled
@@ -434,15 +431,16 @@ class Mv_Scene(QtGui.QStandardItem):
                 self.audio_source_hash = audio_source_hash
 
         self.icon = QtGui.QIcon()
-        self.icon.addPixmap(self.pixmap.scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
-                                               QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                               QtCore.Qt.TransformationMode.SmoothTransformation),
-                            QtGui.QIcon.Mode.Normal,
-                            QtGui.QIcon.State.Off)
+        if self.pixmap:
+            self.icon.addPixmap(self.pixmap.scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
+                                                   QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                                   QtCore.Qt.TransformationMode.SmoothTransformation),
+                                QtGui.QIcon.Mode.Normal,
+                                QtGui.QIcon.State.Off)
 
         super().__init__(parent)
 
-    def __getstate__(self):
+    def __getstate__(self) -> list:
         state = [self.uuid, self.source, self.audio_source, self.scene_type,
                  self.pause, self.duration, self.notes, self.exif]
         byte_array = QtCore.QByteArray()
@@ -508,19 +506,19 @@ class ProjectBinModel(QtGui.QStandardItemModel):
         self.setHorizontalHeaderLabels(["File", "Details"])
         self.endResetModel()
 
-    def supportedDropActions(self):
+    def supportedDropActions(self) -> QtCore.Qt.DropAction:
         return QtCore.Qt.DropAction.IgnoreAction
 
-    def supportedDragActions(self):
+    def supportedDragActions(self) -> QtCore.Qt.DropAction:
         return QtCore.Qt.DropAction.CopyAction | QtCore.Qt.DropAction.LinkAction
 
-    def mimeTypes(self):
+    def mimeTypes(self) -> list[str]:
         types = ["x-application-Qhawana-STILLS", "x-application-Qhawana-AUDIO",
                  "x-application-Qhawana-VIDEO"]
 
         return types
 
-    def mimeData(self, indexes):
+    def mimeData(self, indexes) -> Optional[QtCore.QMimeData]:
         types = self.mimeTypes()
 
         for index in indexes:
@@ -547,7 +545,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
 
                 return mime_data
 
-    def toJson(self, progress_callback):
+    def toJson(self, progress_callback) -> dict:
         items = {}
         item_count = 0
         cur_item = 0
@@ -555,10 +553,10 @@ class ProjectBinModel(QtGui.QStandardItemModel):
         for i in range(self.rowCount()):
             item_count += countRowsOfIndex(self.index(i, 0))
 
-        for index, data in forEach(self):
+        for index, data in forEachItemInModel(self):
             if index:
                 items[index.data()] = []
-                for i, d in forEach(self, index):
+                for i, d in forEachItemInModel(self, index):
                     cur_item += 1
                     items[index.data()].append(d)
                     progress_callback.emit(cur_item // item_count * 100)
@@ -612,7 +610,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
 
 class BinItem(QtGui.QStandardItem):
     def __init__(self, *__args):
-        super().__init__()
+        super().__init__(*__args)
 
 
 class ProjectSettings(QtCore.QObject):
@@ -635,7 +633,7 @@ class ProjectSettings(QtCore.QObject):
         except KeyError:
             return None
 
-    def setProperty(self, property_name: str, value: QtCore.QVariant) -> bool:
+    def setProperty(self, property_name: str, value) -> bool:
         old_value = self.getProperty(property_name)
         if old_value == value:
             return False

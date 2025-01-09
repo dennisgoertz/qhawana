@@ -15,17 +15,25 @@ from PyQt6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets
 
 from qhawana.const import Constants, Scene_Type, Show_States
 from qhawana.model import Mv_Project, Mv_Scene
+from qhawana.widgets import QhawanaSplash
 from qhawana.ui_mainWindow import Ui_mainWindow_Qhawana
 from qhawana.ui_multiVisionShow import Ui_Form_multiVisionShow
 from qhawana.ui_presenterView import Ui_Form_presenterView
 from qhawana.utils import get_supported_mime_types, getKeyframeFromVideo, scalePixmapToWidget, timeStringFromMsec
 from qhawana.worker import Worker
 
+import importlib.resources
+
+res = importlib.resources.files("resources")
+
 
 class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def __init__(self):
         QtWidgets.QMainWindow.__init__(self)
         self.setupUi(self)
+
+        self.setWindowIcon(QtGui.QIcon(str(res / "Qhawana_Icon_32.png")))
+        self.label_applicationIcon.setPixmap(QtGui.QPixmap(str(res / "Qhawana_Icon_96.png")))
 
         self.pushButton_playPausePreview.setIcon(
             self.pushButton_playPausePreview.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaPlay))
@@ -34,7 +42,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.project.bin.clear()
         self.mv_show = self.project.mv_show
         self.pv = None
-        self.save_file = None
         self.changes_saved = True
         self.supported_mime_types = get_supported_mime_types()
         self.scene_index = 0
@@ -99,6 +106,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.actionSave_As.triggered.connect(self.saveAsFileDialog)
         self.actionQuit.triggered.connect(self.quitProject, QtCore.Qt.ConnectionType.QueuedConnection)
         self.actionAbout_Qhawana.triggered.connect(splash_screen.show)
+        self.project.settings.valueChanged.connect(self.settingsChanged)
 
         self.spinBox_transitionTime.valueChanged.connect(
             lambda x: self.project.settings.setProperty("transition_time", x))
@@ -117,12 +125,15 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         event.ignore()
         self.quitProject()
 
+    def settingsChanged(self, setting, value):
+        if setting == "save_file":
+            self.setWindowTitle(f"Qhawana - {value}")
+
     def newProject(self):
         if self.changes_saved:
-            self.project.bin.clear()
+            self.project = Mv_Project()
             self.mv_show.sequence.clear()
             self.mv_show.sequence.__init__()
-            self.save_file = None
             self.scene_index = 0
             self.resetProgressBar()
         else:
@@ -162,17 +173,17 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def saveAsFileDialog(self):
         file_name = QtWidgets.QFileDialog.getSaveFileName(self, "Save project to file")[0]
         if file_name:
-            self.save_file = file_name
+            self.project.settings.setProperty("save_file", file_name)
             self.saveToFile()
 
     def saveToFile(self):
-        if self.save_file:
+        if self.project.settings.getProperty("save_file"):
             self.lockSequence()
 
             self.progressBar.setEnabled(True)
             self.progressBar.setTextVisible(True)
 
-            worker = Worker(self.saveProjectToFile, self.save_file)
+            worker = Worker(self.saveProjectToFile, self.project.settings.getProperty("save_file"))
             worker.signals.progress.connect(self.progressBar.setValue)
             worker.signals.finished.connect(self.resetProgressBar)
             worker.signals.finished.connect(self.unlockSequence)
@@ -266,7 +277,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         QtCore.qInfo(f"Project loaded from file {file_name}")
 
-        self.save_file = file_name
+        self.project.settings.setProperty("save_file", file_name)
         self.changes_saved = True
         self.radioButton_changes.setChecked(False)
 
@@ -1043,19 +1054,12 @@ def launcher(args, show_splash=True):
     app.exec()
 
 
+QtCore.QLoggingCategory.setFilterRules("*.ffmpeg.utils=false")
 app = QtWidgets.QApplication(sys.argv)
 qtmodern.styles.dark(app)
-
-splash_width = app.primaryScreen().geometry().width() // 2
-splash_height = app.primaryScreen().geometry().height() // 2
-splash_pixmap = QtGui.QPixmap("assets/Qhawana_Logo.png")
-
-if splash_pixmap.width() > splash_width or splash_pixmap.height() > splash_height:
-    splash_pixmap = splash_pixmap.scaled(splash_width, splash_height,
-                                         QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                         QtCore.Qt.TransformationMode.SmoothTransformation)
-splash_screen = QtWidgets.QSplashScreen(splash_pixmap)
-splash_screen.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+splash_width = app.primaryScreen().geometry().width() // 2 if app.primaryScreen() else 800
+splash_height = app.primaryScreen().geometry().height() // 2 if app.primaryScreen() else 600
+splash_screen = QhawanaSplash(splash_width, splash_height, str(res / "Qhawana_Splash.png"))
 
 ui = Ui_mainWindow()
 

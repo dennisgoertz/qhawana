@@ -147,3 +147,18 @@ class ProjectBinWidget(QtWidgets.QTreeView):
                     e.ignore()
                 QtCore.qDebug(f"dragging item {item} with parent {parent_item}")
     '''
+
+
+class QhawanaSplash(QtWidgets.QSplashScreen):
+    def __init__(self, splash_width, splash_height, image):
+        super().__init__()
+
+        splash_pixmap = QtGui.QPixmap(image)
+
+        if splash_pixmap.width() > splash_width or splash_pixmap.height() > splash_height:
+            splash_pixmap = splash_pixmap.scaled(splash_width, splash_height,
+                                                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                                 QtCore.Qt.TransformationMode.SmoothTransformation)
+
+        self.setPixmap(splash_pixmap)
+        self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
