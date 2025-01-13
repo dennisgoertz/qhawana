@@ -1,6 +1,6 @@
 #!/bin/bash
 source ../.venv/bin/activate
-export QT_API=PyQt6
+export QT_API=PySide6
 
 ../.venv/bin/pyinstaller --clean --onefile --strip --optimize 2 --noconfirm --log-level WARN \
                 --distpath ../dist \

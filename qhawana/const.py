@@ -12,6 +12,14 @@ class Scene_Type(enum.IntEnum):
     VIDEO = 2
 
 
+class Bin_Type(enum.IntEnum):
+    EMPTY = 0
+    STILL = 1
+    VIDEO = 2
+    AUDIO = 3
+    TRACK = 4
+
+
 class Show_States(enum.IntEnum):
     STOPPED = 0
     RUNNING = 1

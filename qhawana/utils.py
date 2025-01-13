@@ -4,7 +4,7 @@ from typing import Optional
 import PIL.ImageQt
 import av
 
-from PyQt6 import QtCore, QtWidgets, QtGui, QtMultimedia
+from PySide6 import QtCore, QtWidgets, QtGui, QtMultimedia
 
 
 def forEachItemInModel(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):

@@ -13,7 +13,7 @@ def test_get_supported_mime_types():
 
 def test_count_rows_of_index():
     from utils import countRowsOfIndex
-    from PyQt6 import QtGui
+    from PySide6 import QtGui
 
     model = QtGui.QStandardItemModel()
     parent = model.invisibleRootItem()
@@ -31,7 +31,7 @@ def test_count_rows_of_index():
 
 def test_for_each_item_in_model():
     from utils import forEachItemInModel
-    from PyQt6 import QtCore, QtGui
+    from PySide6 import QtCore, QtGui
 
     model = QtGui.QStandardItemModel()
     parent = model.invisibleRootItem()
@@ -61,7 +61,7 @@ def test_for_each_item_in_model():
 
 def test_scale_pixmap_to_widget(qtbot):
     from utils import scalePixmapToWidget
-    from PyQt6 import QtCore, QtGui, QtWidgets
+    from PySide6 import QtCore, QtGui, QtWidgets
 
     pixmap = QtGui.QPixmap(200, 100)
     widget = QtWidgets.QLabel()
@@ -78,7 +78,7 @@ def test_scale_pixmap_to_widget(qtbot):
 # noinspection PyUnusedLocal
 def test_get_keyframe_from_video(qapp):
     from utils import getKeyframeFromVideo
-    from PyQt6 import QtGui
+    from PySide6 import QtGui
 
     image = getKeyframeFromVideo(str(res / "bear-1280x720.mp4"))
     assert isinstance(image, QtGui.QImage), "getKeyframeFromVideo did not return a QImage"

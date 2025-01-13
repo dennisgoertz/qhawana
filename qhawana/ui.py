@@ -3,15 +3,15 @@ import json
 import mimetypes
 import os
 import sys
-import qtmodern.styles
 
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from _typeshed import SupportsWrite
 
 import av
 import exiftool
-from PyQt6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets
+from PySide6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets
 
 from qhawana.const import Constants, Scene_Type, Show_States
 from qhawana.model import Mv_Project, Mv_Scene
@@ -40,8 +40,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         self.project = Mv_Project()
         self.project.bin.clear()
-        self.mv_show = self.project.mv_show
-        self.pv = None
+        self.pv = Ui_presenterView(parent=self)
         self.changes_saved = True
         self.supported_mime_types = get_supported_mime_types()
         self.scene_index = 0
@@ -54,8 +53,8 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.pushButton_outPoint.clicked.connect(self.setVideoOutPoint)
         self.videoTimer = QtCore.QTimer()
 
-        self.listView_filmStrip.setModel(self.mv_show.sequence)
-        self.tableView_scenes.setModel(self.mv_show.sequence)
+        self.listView_filmStrip.setModel(self.project.mv_show.sequence)
+        self.tableView_scenes.setModel(self.project.mv_show.sequence)
         self.tableView_scenes.setSelectionMode(self.tableView_scenes.SelectionMode.ContiguousSelection)
         self.tableView_scenes.setSelectionBehavior(self.tableView_scenes.SelectionBehavior.SelectRows)
         self.tableView_scenes.setDragDropMode(self.tableView_scenes.DragDropMode.DragDrop)
@@ -73,13 +72,13 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.treeView.header().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
         self.threadpool = QtCore.QThreadPool().globalInstance()
-        QtCore.qInfo("Multithreading with maximum %d threads" % self.threadpool.maxThreadCount())
-        QtCore.qInfo("Supported media MIME types: %s" % self.supported_mime_types)
+        QtCore.qDebug("Multithreading with maximum %d threads" % self.threadpool.maxThreadCount())
+        QtCore.qDebug("Supported media MIME types: %s" % self.supported_mime_types)
 
         self.screens = app.screens()
         for i, s in enumerate(self.screens):
-            QtCore.qInfo(f"Found screen {i} in {s.orientation().name} with resolution "
-                         f"{s.availableGeometry().width()}x{s.availableGeometry().height()}.")
+            QtCore.qDebug(f"Found screen {i} in {s.orientation().name} with resolution "
+                          f"{s.availableGeometry().width()}x{s.availableGeometry().height()}.")
 
         if len(self.screens) > 1:
             qr = self.screens[0].geometry()
@@ -87,18 +86,18 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         self.pushButton_mediaSourceDirectory.clicked.connect(self.sceneFromDirectoryDialog)
         self.pushButton_startShow.clicked.connect(self.openPresenterView)
-        self.mv_show.sequence.dataChanged.connect(self.changed)
-        self.mv_show.sequence.layoutChanged.connect(self.changed)
-        self.mv_show.sequence.rowsInserted.connect(self.changed)
-        self.mv_show.sequence.rowsRemoved.connect(self.changed)
+        self.project.mv_show.sequence.dataChanged.connect(self.changed)
+        self.project.mv_show.sequence.layoutChanged.connect(self.changed)
+        self.project.mv_show.sequence.rowsInserted.connect(self.changed)
+        self.project.mv_show.sequence.rowsRemoved.connect(self.changed)
         self.project.settings.valueChanged.connect(self.changed)
-        self.mv_show.sequence.rowsRemoved.connect(self.showScenePreview)
+        self.project.mv_show.sequence.rowsRemoved.connect(self.showScenePreview)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.syncSelection)
         self.tableView_scenes.selectionModel().selectionChanged.connect(self.showScenePreview)
         self.listView_filmStrip.selectionModel().selectionChanged.connect(self.syncSelection)
         self.listView_filmStrip.selectionModel().selectionChanged.connect(self.showScenePreview)
         self.treeView.selectionModel().selectionChanged.connect(self.showBinPreview)
-        self.mv_show.sequence.rowsInserted.connect(self.tableView_scenes.resizeColumnsToContents)
+        self.project.mv_show.sequence.rowsInserted.connect(self.tableView_scenes.resizeColumnsToContents)
         self.textEdit_notes.textChanged.connect(self.updateSceneNotes)
         self.actionNew.triggered.connect(self.newProject)
         self.actionOpen.triggered.connect(self.loadFromFile)
@@ -131,10 +130,13 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
     def newProject(self):
         if self.changes_saved:
+            QtCore.qDebug("Creating new project")
             self.project = Mv_Project()
-            self.mv_show.sequence.clear()
-            self.mv_show.sequence.__init__()
+            self.listView_filmStrip.setModel(self.project.mv_show.sequence)
+            self.tableView_scenes.setModel(self.project.mv_show.sequence)
+            self.treeView.setModel(self.project.bin)
             self.scene_index = 0
+            self.setWindowTitle("Qhawana")
             self.resetProgressBar()
         else:
             answer = self.saveChangesDialog()
@@ -171,7 +173,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 pass
 
     def saveAsFileDialog(self):
-        file_name = QtWidgets.QFileDialog.getSaveFileName(self, "Save project to file")[0]
+        file_name = QtWidgets.QFileDialog.getSaveFileName(self, self.tr("Save project to file"))[0]
         if file_name:
             self.project.settings.setProperty("save_file", file_name)
             self.saveToFile()
@@ -199,9 +201,10 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def loadFromFile(self, file_name=""):
         if self.changes_saved:
             if not file_name:
-                file_name = QtWidgets.QFileDialog.getOpenFileName(self, "Select project file")[0]
+                file_name = QtWidgets.QFileDialog.getOpenFileName(self, self.tr("Select project file"))[0]
             if file_name:
                 self.lockSequence()
+                self.newProject()
 
                 self.progressBar.setEnabled(True)
                 self.progressBar.setTextVisible(True)
@@ -211,9 +214,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 worker.signals.finished.connect(self.resetProgressBar)
                 worker.signals.finished.connect(self.unlockSequence)
                 self.threadpool.start(worker)
-
-                self.changes_saved = True
-                self.radioButton_changes.setChecked(False)
         else:
             answer = self.saveChangesDialog()
 
@@ -231,8 +231,8 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def saveChangesDialog(self):
         popup = QtWidgets.QMessageBox(self)
         popup.setIcon(QtWidgets.QMessageBox.Icon.Warning)
-        popup.setText("The project has unsaved changes")
-        popup.setInformativeText("Would you like to save your changes?")
+        popup.setText(self.tr("The project has unsaved changes"))
+        popup.setInformativeText(self.tr("Would you like to save your changes?"))
         popup.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Save |
                                  QtWidgets.QMessageBox.StandardButton.Cancel |
                                  QtWidgets.QMessageBox.StandardButton.Discard)
@@ -247,11 +247,11 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         with gzip.open(file_name, 'wt', encoding='ascii') as f:
             settings = self.project.settings.toJson()
             project_bin = self.project.bin.toJson(progress_callback)
-            show = self.mv_show.toJson(progress_callback)
+            show = self.project.mv_show.toJson(progress_callback)
             json.dump(settings | project_bin | show, f)
 
     def loadProjectFromFile(self, file_name, progress_callback):
-        QtCore.qInfo(f"Loading project from file {file_name}")
+        QtCore.qDebug(f"Loading project from file {file_name}")
 
         try:
             with gzip.open(file_name, 'r') as f:
@@ -273,16 +273,16 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         if "scenes" in json_string:
             QtCore.qDebug(f"Loading {len(json_string['scenes'])} scenes")
-            self.mv_show.fromJson(json_string["scenes"], progress_callback)
+            self.project.mv_show.fromJson(json_string["scenes"], progress_callback)
 
-        QtCore.qInfo(f"Project loaded from file {file_name}")
+        QtCore.qDebug(f"Project loaded from file {file_name}")
 
         self.project.settings.setProperty("save_file", file_name)
         self.changes_saved = True
         self.radioButton_changes.setChecked(False)
 
     def sceneFromDirectoryDialog(self):
-        dir_name = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Media Source Directory")
+        dir_name = QtWidgets.QFileDialog.getExistingDirectory(self, self.tr("Select Media Source Directory"))
         if dir_name:
             self.textEdit_mediaSourceDirectory.setText(dir_name)
             self.progressBar.setEnabled(True)
@@ -398,7 +398,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 # Audio items will only be added to the project bin, but no scene item will be created, so continue:
                 continue
             else:
-                QtCore.qInfo(f"File {file.encode(errors='ignore')} ({mimetype}) is not supported.")
+                QtCore.qDebug(f"File {file.encode(errors='ignore')} ({mimetype}) is not supported.")
                 # Files with MIME types that we do not understand will be ignored, so continue:
                 continue
 
@@ -406,7 +406,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             scene_item.setData(scene)
             scene_item.setDropEnabled(False)
 
-            self.mv_show.sequence.appendRow(scene_item)
+            self.project.mv_show.sequence.appendRow(scene_item)
 
         return True
 
@@ -424,16 +424,15 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.listView_filmStrip.setEnabled(True)
 
     def openPresenterView(self):
-        if self.mv_show.length() > 0:
-            self.pv = Ui_presenterView(parent=self)
+        if self.project.mv_show.length() > 0:
             if len(self.screens) > 1:
                 qr = self.screens[0].geometry()
                 self.pv.move(qr.left(), qr.top())
             self.pv.show()
         else:
             dialog = QtWidgets.QMessageBox(self)
-            dialog.setWindowTitle("Empty MultiVision show!")
-            dialog.setText("Please add scenes first.")
+            dialog.setWindowTitle(self.tr("Empty MultiVision show!"))
+            dialog.setText(self.tr("Please add scenes first."))
             dialog.exec()
 
     def showBinPreview(self, selection):
@@ -491,9 +490,9 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         if scene_index.isValid():
             QtCore.qDebug(f"Showing preview for row {scene_index.row()} "
-                          f"({self.mv_show.sequence.rowCount()} items in list, "
-                          f"{self.mv_show.sequence.sceneCount()} scenes in show)")
-            scene: Mv_Scene = self.mv_show.sequence.item(scene_index.row())
+                          f"({self.project.mv_show.sequence.rowCount()} items in list, "
+                          f"{self.project.mv_show.sequence.sceneCount()} scenes in show)")
+            scene: Mv_Scene = self.project.mv_show.sequence.item(scene_index.row())
 
             if scene:
                 self.scene_index = scene_index.row()
@@ -554,25 +553,25 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         if self.videoPreviewPlayer.isPlaying():
             self.horizontalSlider_videoPosition.setValue(self.videoPreviewPlayer.position())
 
-            scene = self.mv_show.sequence.item(self.scene_index)
+            scene = self.project.mv_show.sequence.item(self.scene_index)
             if position == scene.out_point:
                 self.videoPreviewPlayer.pause()
         else:
             self.videoPreviewPlayer.setPosition(position)
 
     def setVideoInPoint(self):
-        scene_index = self.mv_show.sequence.index(self.scene_index, 4)
+        scene_index = self.project.mv_show.sequence.index(self.scene_index, 4)
         if scene_index.isValid():
-            self.mv_show.sequence.setData(scene_index,
-                                          self.horizontalSlider_videoPosition.value(),
-                                          QtCore.Qt.ItemDataRole.EditRole)
+            self.project.mv_show.sequence.setData(scene_index,
+                                                  self.horizontalSlider_videoPosition.value(),
+                                                  QtCore.Qt.ItemDataRole.EditRole)
 
     def setVideoOutPoint(self):
-        scene_index = self.mv_show.sequence.index(self.scene_index, 5)
+        scene_index = self.project.mv_show.sequence.index(self.scene_index, 5)
         if scene_index.isValid():
-            self.mv_show.sequence.setData(scene_index,
-                                          self.horizontalSlider_videoPosition.value(),
-                                          QtCore.Qt.ItemDataRole.EditRole)
+            self.project.mv_show.sequence.setData(scene_index,
+                                                  self.horizontalSlider_videoPosition.value(),
+                                                  QtCore.Qt.ItemDataRole.EditRole)
 
     def syncSelection(self, selection):
         indexes = selection.indexes()
@@ -595,7 +594,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 # self.listView_filmStrip.blockSignals(False)
 
     def updateSceneNotes(self):
-        scene = self.mv_show.sequence.item(self.scene_index)
+        scene = self.project.mv_show.sequence.item(self.scene_index)
         if scene:
             scene_data = scene
             scene_data.notes = self.textEdit_notes.toPlainText()
@@ -603,10 +602,13 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def changed(self):
         self.changes_saved = False
         self.radioButton_changes.setChecked(True)
+        if self.project.settings.getProperty("save_file"):
+            self.setWindowTitle("Qhawana - " + str(self.project.settings.getProperty('save_file')) +
+                                " (" + self.tr("changed") + ")")
 
 
 class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
-    scene_changed = QtCore.pyqtSignal(int)
+    scene_changed = QtCore.Signal(int)
 
     def __init__(self, parent: Ui_mainWindow):
         QtWidgets.QWidget.__init__(self)
@@ -644,8 +646,8 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.pushButton_audio_fadeOut.clicked.connect(lambda x: self.controlAudio("fade_out"))
         self.dial_volume.valueChanged.connect(lambda x: self.controlAudio("volume"))
 
-        self.parent.mv_show.state_changed.connect(self.progressBar_state.setFormat)
-        self.parent.mv_show.state_changed.connect(lambda x: self.scene_runner())
+        self.parent.project.mv_show.state_changed.connect(self.progressBar_state.setFormat)
+        self.parent.project.mv_show.state_changed.connect(lambda x: self.scene_runner())
         self.scene_changed.connect(self.scene_runner)
 
         self.audio_fade_in_anim = QtCore.QPropertyAnimation(self.mv.musicAudioOutput, b"volume")
@@ -667,12 +669,14 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.audio_fade_out_anim.finished.connect(lambda: self.pushButton_audio_fadeOut.setChecked(False))
 
         self.scene_timer = QtCore.QTimer()
+        # Declare to store and disconnect the signal-slot-connections for the scene timer
+        self.timer_connection = None
 
         self.updateDialPosition()
         self.changeScene("first")
 
     def close(self):
-        self.parent.mv_show.set_state(Show_States.STOPPED)
+        self.parent.project.mv_show.set_state(Show_States.STOPPED)
         super().close()
 
     def eventFilter(self, source, event):
@@ -691,12 +695,12 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         return super(Ui_presenterView, self).eventFilter(source, event)
 
     def scene_runner(self, scene_index=None):
-        if self.parent.mv_show.state() == Show_States.RUNNING:
+        if self.parent.project.mv_show.state() == Show_States.RUNNING:
             if scene_index is None:
                 self.mv.scene_fade_out_anim.start()
                 QtCore.qDebug(f"Fading out scene {self.current_scene}")
             else:
-                scene = self.parent.mv_show.getScene(scene_index)
+                scene = self.parent.project.mv_show.getScene(scene_index)
                 if scene.duration > 0 or scene.duration == -1:
                     if 0 <= scene.in_point < scene.out_point:
                         duration = scene.out_point - scene.in_point
@@ -708,11 +712,11 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
                     self.progress_animation.start()
 
                     try:
-                        self.scene_timer.disconnect()
+                        self.scene_timer.disconnect(self.timer_connection)
                     except TypeError:
                         pass
                     self.scene_timer.stop()
-                    self.scene_timer.timeout.connect(self.scene_runner)
+                    self.timer_connection = self.scene_timer.timeout.connect(self.scene_runner)
                     self.scene_timer.setSingleShot(True)
                     self.scene_timer.start(duration)
 
@@ -722,7 +726,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             self.scene_timer.stop()
 
     def changeScene(self, action, index=None):
-        length = self.parent.mv_show.length()
+        length = self.parent.project.mv_show.length()
 
         if length == 0:
             return False
@@ -738,17 +742,19 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         else:
             return False
 
-        scene = self.parent.mv_show.getScene(self.current_scene)
-        prev_scene = self.parent.mv_show.getScene(self.current_scene - 1) if self.current_scene > 0 else None
-        next_scene = self.parent.mv_show.getScene(self.current_scene + 1) if self.current_scene < (length - 1) else None
+        scene = self.parent.project.mv_show.getScene(self.current_scene)
+        prev_scene = self.parent.project.mv_show.getScene(self.current_scene - 1) \
+            if self.current_scene > 0 else None
+        next_scene = self.parent.project.mv_show.getScene(self.current_scene + 1) \
+            if self.current_scene < (length - 1) else None
 
         self.label_sceneCounter.setText(f"{self.current_scene + 1}/{length}")
         self.updatePresenterView(scene, prev_scene, next_scene)
 
-        if self.parent.mv_show.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
+        if self.parent.project.mv_show.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
             self.mv.loadScene(scene)
-            if self.parent.mv_show.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
-                self.parent.mv_show.set_state(Show_States.FINISHED)
+            if self.parent.project.mv_show.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
+                self.parent.project.mv_show.set_state(Show_States.FINISHED)
 
         QtCore.qDebug(f"Changing scene to {self.current_scene}")
         self.scene_changed.emit(self.current_scene)
@@ -837,7 +843,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             self.mv.audioPlayer.setSource(QtCore.QUrl())
 
     def startShow(self):
-        state = self.parent.mv_show.state()
+        state = self.parent.project.mv_show.state()
         try:
             self.mv.scene_fade_out_anim.finished.disconnect()
         except TypeError:
@@ -851,19 +857,19 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
                 self.mv.move(qr.left(), qr.top())
                 # self.mv.showFullScreen()
             self.mv.show()
-            self.parent.mv_show.set_state(Show_States.RUNNING)
+            self.parent.project.mv_show.set_state(Show_States.RUNNING)
         elif state == Show_States.PAUSED:
-            self.parent.mv_show.set_state(Show_States.RUNNING)
+            self.parent.project.mv_show.set_state(Show_States.RUNNING)
 
     def pauseShow(self):
-        if self.parent.mv_show.state() == Show_States.RUNNING:
+        if self.parent.project.mv_show.state() == Show_States.RUNNING:
             try:
                 self.mv.scene_fade_out_anim.finished.disconnect()
             except TypeError:
                 # A TypeError is raised if disconnect is called and there are no active connections
                 pass
 
-            self.parent.mv_show.set_state(Show_States.PAUSED)
+            self.parent.project.mv_show.set_state(Show_States.PAUSED)
             self.progressBar_state.setValue(0)
             # TODO: We could pause instead of stopping, but QTimer does not support pause and resume out of the box.
 
@@ -971,7 +977,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             if scene.play_video_audio and not self.parent.pushButton_audio_quiet.isChecked():
                 self.parent.pushButton_audio_quiet.click()
 
-            self.parent.parent.mv_show.state_changed.connect(self.manageVideoPlayback)
+            self.parent.parent.project.mv_show.state_changed.connect(self.manageVideoPlayback)
 
             video_item = QtMultimediaWidgets.QGraphicsVideoItem()
             video_item.setSize(self.graphicsView.size().toSizeF())
@@ -1016,9 +1022,9 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.videoPlayer.stop()
 
     def manageVideoPlayback(self):
-        if self.parent.parent.mv_show.state() == Show_States.PAUSED:
+        if self.parent.parent.project.mv_show.state() == Show_States.PAUSED:
             self.videoPlayer.pause()
-        elif self.parent.parent.mv_show.state() == Show_States.RUNNING:
+        elif self.parent.parent.project.mv_show.state() == Show_States.RUNNING:
             self.videoPlayer.play()
 
 
@@ -1043,6 +1049,8 @@ def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
 
 
 def launcher(args, show_splash=True):
+    ui = Ui_mainWindow()
+
     if show_splash:
         splash_screen.show()
         splash_screen.finish(ui)
@@ -1055,13 +1063,13 @@ def launcher(args, show_splash=True):
 
 
 QtCore.QLoggingCategory.setFilterRules("*.ffmpeg.utils=false")
+translator = QtCore.QTranslator()
+translator.load('i18n/en_US')
 app = QtWidgets.QApplication(sys.argv)
-qtmodern.styles.dark(app)
+app.installTranslator(translator)
 splash_width = app.primaryScreen().geometry().width() // 2 if app.primaryScreen() else 800
 splash_height = app.primaryScreen().geometry().height() // 2 if app.primaryScreen() else 600
 splash_screen = QhawanaSplash(splash_width, splash_height, str(res / "Qhawana_Splash.png"))
-
-ui = Ui_mainWindow()
 
 if __name__ == "__main__":
     sys.exit(launcher(sys.argv))

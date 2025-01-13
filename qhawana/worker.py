@@ -3,14 +3,14 @@ from __future__ import annotations
 import sys
 import traceback
 
-from PyQt6 import QtCore
+from PySide6 import QtCore
 
 
 class WorkerSignals(QtCore.QObject):
-    finished = QtCore.pyqtSignal()
-    error = QtCore.pyqtSignal(tuple)
-    result = QtCore.pyqtSignal(object)
-    progress = QtCore.pyqtSignal(int)
+    finished = QtCore.Signal()
+    error = QtCore.Signal(tuple)
+    result = QtCore.Signal(object)
+    progress = QtCore.Signal(int)
 
 
 class Worker(QtCore.QRunnable):
@@ -26,7 +26,7 @@ class Worker(QtCore.QRunnable):
         # Add the callback to our kwargs
         self.kwargs['progress_callback'] = self.signals.progress
 
-    @QtCore.pyqtSlot()
+    @QtCore.Slot()
     def run(self):
         """
         Initialise the runner function with passed args, kwargs.

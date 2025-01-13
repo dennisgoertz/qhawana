@@ -3,7 +3,7 @@ import os
 from typing import Optional
 
 import av
-from PyQt6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui
 
 from qhawana.const import Constants, Scene_Type, Show_States
 from qhawana.utils import (timeStringFromMsec, getFileHashSHA1, countRowsOfIndex, forEachItemInModel,
@@ -19,7 +19,7 @@ class Mv_Project(QtCore.QObject):
 
 
 class Mv_Show(QtCore.QObject):
-    state_changed = QtCore.pyqtSignal(str)
+    state_changed = QtCore.Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,8 +81,8 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        self.setHorizontalHeaderLabels(["Visual source", "Audio source", "Capture Time",
-                                        "Duration", "In Point", "Out Point"])
+        self.setHorizontalHeaderLabels([self.tr("Visual source"), self.tr("Audio source"), self.tr("Capture Time"),
+                                        self.tr("Duration"), self.tr("In Point"), self.tr("Out Point")])
 
     def data(self, index, role=...):
         if not (index.isValid() and index.row() <= self.rowCount()):
@@ -197,7 +197,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
     def headerData(self, section, orientation, role=...):
         if role == QtCore.Qt.ItemDataRole.SizeHintRole:
-            return QtCore.QVariant()
+            pass
         elif role == QtCore.Qt.ItemDataRole.DisplayRole:
             if orientation == QtCore.Qt.Orientation.Horizontal:
                 return self._horizontal_headers[section]
@@ -255,7 +255,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
     def insertRows(self, row, count, parent=...):
         self.beginInsertRows(parent, row, row + count - 1)
         for r in range(count):
-            QtCore.qInfo(f"inserting row after {row}")
+            QtCore.qDebug(f"inserting row after {row}")
             self._sequence.insert(row, QtGui.QStandardItem())
         self.endInsertRows()
         return True
@@ -263,7 +263,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
     def removeRows(self, row, count, parent=...):
         self.beginRemoveRows(parent, row, row + count - 1)
         for r in range(count):
-            QtCore.qInfo(f"deleting row {row}")
+            QtCore.qDebug(f"deleting row {row}")
             del self._sequence[row]
         self.endRemoveRows()
         return True
@@ -491,7 +491,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.categoryItems = {"STILLS": None, "AUDIO": None, "VIDEO": None}
+        self.categoryItems = {"STILLS": None, "AUDIO": None, "VIDEO": None, "TRACKS": None}
 
     def clear(self):
         super().clear()
@@ -503,7 +503,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
             ci.setDropEnabled(True)
             self.categoryItems[c] = ci
             root.appendRow(ci)
-        self.setHorizontalHeaderLabels(["File", "Details"])
+        self.setHorizontalHeaderLabels([self.tr("File"), self.tr("Details")])
         self.endResetModel()
 
     def supportedDropActions(self) -> QtCore.Qt.DropAction:
@@ -514,7 +514,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
 
     def mimeTypes(self) -> list[str]:
         types = ["x-application-Qhawana-STILLS", "x-application-Qhawana-AUDIO",
-                 "x-application-Qhawana-VIDEO"]
+                 "x-application-Qhawana-VIDEO", "x-application-Qhawana-TRACKS"]
 
         return types
 
@@ -536,6 +536,8 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                         format_type = "x-application-Qhawana-VIDEO"
                     elif parent_item == "AUDIO":
                         format_type = "x-application-Qhawana-AUDIO"
+                    elif parent_item == "TRACKS":
+                        format_type = "x-application-Qhawana-TRACKS"
 
                 encoded = QtCore.QByteArray()
                 stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.WriteOnly)
@@ -575,9 +577,19 @@ class ProjectBinModel(QtGui.QStandardItemModel):
 
         cur_item = 0
         for category, items in json_string.items():
+            if category not in self.categoryItems.keys():
+                QtCore.qWarning(f"Skipping items in unexpected category '{category}' when population project bin")
+                cur_item += len(items)
+                progress_callback.emit(cur_item // num_items * 100)
+                continue
+
             for v in items:
                 cur_item += 1
                 progress_callback.emit(cur_item // num_items * 100)
+
+                if not os.path.exists(v):
+                    QtCore.qWarning(f"Skipping nonexistent item '{v}' for category '{category}'"
+                                    f"when populating project bin")
 
                 file = os.path.basename(v)
                 bin_item = QtGui.QStandardItem(file)
@@ -596,6 +608,8 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                               scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
                                      QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                      QtCore.Qt.TransformationMode.FastTransformation))
+                elif category == "TRACKS":
+                    pass
 
                 if pixmap:
                     tooltip_image = jsonValFromPixmap(pixmap)
@@ -614,7 +628,7 @@ class BinItem(QtGui.QStandardItem):
 
 
 class ProjectSettings(QtCore.QObject):
-    valueChanged = QtCore.pyqtSignal(str, QtCore.QVariant, name="valueChanged")
+    valueChanged = QtCore.Signal(str, list[str], name="valueChanged")
 
     def __init__(self, parent=None):
         self.__settings = {"transition_time": 1000, "default_delay": 5000}
@@ -711,9 +725,14 @@ def jsonValFromPixmap(pixmap: QtGui.QPixmap) -> str:
 
     ba1 = buf.data().toBase64()
 
-    decoder = QtCore.QStringDecoder(QtCore.QStringDecoder.Encoding.Latin1)
-
-    return decoder(ba1)
+    # Bug in PySide, see here:
+    # https://stackoverflow.com/questions/70749870/qstringdecoder-not-callable-in-pyside6
+    # So we'll use plain python instead
+    #
+    # decoder = QtCore.QStringDecoder(QtCore.QStringDecoder.Encoding.Latin1)
+    # return decoder(ba1)
+    
+    return ba1.data().decode('Latin1')
 
 
 def pixmapFromJsonVal(val: str) -> QtGui.QPixmap:
