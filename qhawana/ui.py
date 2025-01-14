@@ -11,15 +11,15 @@ if TYPE_CHECKING:
 
 import av
 import exiftool
-from PySide6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets
+from PySide6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets, QtQuickWidgets
 
 from qhawana.const import Constants, Scene_Type, Show_States
-from qhawana.model import Mv_Project, Mv_Scene
+from qhawana.model import Mv_Project, Mv_Scene, BinItem
 from qhawana.widgets import QhawanaSplash
 from qhawana.ui_mainWindow import Ui_mainWindow_Qhawana
 from qhawana.ui_multiVisionShow import Ui_Form_multiVisionShow
 from qhawana.ui_presenterView import Ui_Form_presenterView
-from qhawana.utils import get_supported_mime_types, getKeyframeFromVideo, scalePixmapToWidget, timeStringFromMsec
+from qhawana.utils import get_supported_mime_types, getKeyframeFromVideo, scalePixmapToWidget, timeStringFromMsec, validateGPX
 from qhawana.worker import Worker
 
 import importlib.resources
@@ -46,7 +46,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.scene_index = 0
 
         self.videoPreviewPlayer = QtMultimedia.QMediaPlayer(parent=self)
-        self.videoPreviewPlayer.setVideoOutput(self.videoPreviewWidget)
         self.videoPreviewPlayer.durationChanged.connect(self.horizontalSlider_videoPosition.setMaximum)
         self.pushButton_playPausePreview.clicked.connect(self.playPauseVideoPreview)
         self.pushButton_inPoint.clicked.connect(self.setVideoInPoint)
@@ -316,16 +315,28 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             mimetype, encoding = mimetypes.guess_type(path)
 
             if mimetype is None:
-                QtCore.qWarning(f"Failed to get Mimetype for {file}.")
-                # TODO: Could there be cases where we would want to process
-                #  the file even if we don't know the MIME type?
+                if path.endswith(".gpx") and validateGPX(path):
+                    bin_item = BinItem(file).fromGPX(path)
+                    bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
+                    parent = self.project.bin.findItems("TRACKS", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
+                    parent.appendRow(bin_item)
+                    QtCore.qDebug(f"Adding track file {path} to project bin")
+                else:
+                    QtCore.qWarning(f"Failed to get Mimetype for {file}.")
+                    # TODO: Could there be cases where we would want to process
+                    #  the file even if we don't know the MIME type?
                 continue
 
             if mimetype.startswith("image/"):
                 audio_path = ""
                 pixmap = QtGui.QPixmap(path)
 
-                exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
+                try:
+                    exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
+                except exiftool.exceptions.ExifToolExecuteError:
+                    QtCore.qWarning(f"Failed to get Exif data for file {path}")
+                    exif_data = []
+
                 scene = Mv_Scene(source=path,
                                  audio_source=audio_path,
                                  pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
@@ -335,7 +346,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                                  exif=exif_data)
                 QtCore.qDebug(f"Adding image scene from file {path}")
 
-                bin_item = QtGui.QStandardItem(file)
+                bin_item = BinItem(file)
                 bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
                 bin_item.setDragEnabled(True)
                 bin_item.setDropEnabled(False)
@@ -375,7 +386,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 QtCore.qDebug(f"Adding video scene from file {path} with duration {duration} ms, "
                               f"in point {in_point} ms and out point {out_point} ms")
 
-                bin_item = QtGui.QStandardItem(file)
+                bin_item = BinItem(file)
                 bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
 
                 bin_item.setDragEnabled(True)
@@ -386,7 +397,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
                 QtCore.qDebug(f"Adding video file {path} to project bin")
             elif mimetype.startswith("audio/"):
-                bin_item = QtGui.QStandardItem(file)
+                bin_item = BinItem(file)
                 bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
                 bin_item.setDragEnabled(True)
                 bin_item.setDropEnabled(False)
@@ -457,26 +468,47 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 QtCore.qDebug(f"Showing preview for {parent_type} item {bin_index.row()} "
                               f"({self.project.bin.rowCount(parent.index())} items in bin)")
 
+                graphics_scene = QtWidgets.QGraphicsScene()
+
                 if parent_type == "STILLS":
-                    self.stackedWidget_preview.setCurrentIndex(0)
                     self.pushButton_playPausePreview.setEnabled(False)
                     self.horizontalSlider_videoPosition.setEnabled(False)
                     self.videoPreviewPlayer.stop()
                     self.videoPreviewPlayer.setSource(QtCore.QUrl())
 
-                    self.label_mediaPreview.setPixmap(
-                        scalePixmapToWidget(self.label_mediaPreview,
+                    image_item = QtWidgets.QGraphicsPixmapItem()
+                    image_item.setPixmap(
+                        scalePixmapToWidget(self.graphicsView_preview,
                                             QtGui.QPixmap(bin_item.data(QtCore.Qt.ItemDataRole.UserRole))))
+                    graphics_scene.addItem(image_item)
+
                 elif parent_type == "VIDEO":
-                    self.stackedWidget_preview.setCurrentIndex(1)
                     self.pushButton_playPausePreview.setEnabled(True)
                     self.horizontalSlider_videoPosition.setEnabled(True)
 
                     # TODO: Check if MIME Type of scene.source is supported and the file exists
                     self.videoPreviewPlayer.setSource(
                         QtCore.QUrl.fromLocalFile(bin_item.data(QtCore.Qt.ItemDataRole.UserRole)))
+
+                    video_item = QtMultimediaWidgets.QGraphicsVideoItem()
+                    video_item.setSize(self.graphicsView_preview.size().toSizeF())
+                    video_item.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+                    self.videoPreviewPlayer.setVideoOutput(video_item)
+
                     self.videoPreviewPlayer.play()
                     self.videoTimer.singleShot(100, self.videoPreviewPlayer.pause)
+
+                    graphics_scene.addItem(video_item)
+                elif parent_type == "TRACKS":
+                    qw = QtQuickWidgets.QQuickWidget(parent=None)
+                    qw.setFixedSize(self.graphicsView_preview.size())
+                    qw.setSource(QtCore.QUrl("map.qml"))
+
+                    graphics_scene.addWidget(qw)
+
+                self.graphicsView_preview.items().clear()
+                self.graphicsView_preview.viewport().update()
+                self.graphicsView_preview.setScene(graphics_scene)
         else:
             QtCore.qDebug("Invalid index, not showing preview")
 
@@ -497,11 +529,12 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             if scene:
                 self.scene_index = scene_index.row()
 
+                graphics_scene = QtWidgets.QGraphicsScene()
+
                 self.horizontalSlider_videoPosition.setValue(0)
                 self.pushButton_playPausePreview.setChecked(False)
 
                 if scene.scene_type == Scene_Type.STILL:
-                    self.stackedWidget_preview.setCurrentIndex(0)
                     self.pushButton_inPoint.setEnabled(False)
                     self.pushButton_outPoint.setEnabled(False)
                     self.pushButton_playPausePreview.setEnabled(False)
@@ -509,10 +542,13 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                     self.videoPreviewPlayer.stop()
                     self.videoPreviewPlayer.setSource(QtCore.QUrl())
 
-                    self.label_mediaPreview.setPixmap(scalePixmapToWidget(self.label_mediaPreview,
-                                                                          getPixmapFromScene(scene)))
+                    image_item = QtWidgets.QGraphicsPixmapItem()
+                    image_item.setPixmap(
+                        scalePixmapToWidget(self.graphicsView_preview,
+                                            getPixmapFromScene(scene)))
+                    graphics_scene.addItem(image_item)
+
                 elif scene.scene_type == Scene_Type.VIDEO:
-                    self.stackedWidget_preview.setCurrentIndex(1)
                     self.pushButton_inPoint.setEnabled(True)
                     self.pushButton_outPoint.setEnabled(True)
                     self.pushButton_playPausePreview.setEnabled(True)
@@ -520,10 +556,22 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
                     # TODO: Check if MIME Type of scene.source is supported and the file exists
                     self.videoPreviewPlayer.setSource(QtCore.QUrl.fromLocalFile(scene.source))
+
+                    video_item = QtMultimediaWidgets.QGraphicsVideoItem()
+                    video_item.setSize(self.graphicsView_preview.size().toSizeF())
+                    video_item.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+                    self.videoPreviewPlayer.setVideoOutput(video_item)
+
                     self.videoPreviewPlayer.play()
                     if scene.in_point > 0:
                         self.videoPreviewPlayer.setPosition(scene.in_point)
                     self.videoTimer.singleShot(100, self.videoPreviewPlayer.pause)
+
+                    graphics_scene.addItem(video_item)
+
+                self.graphicsView_preview.items().clear()
+                self.graphicsView_preview.viewport().update()
+                self.graphicsView_preview.setScene(graphics_scene)
 
                 self.textEdit_notes.setText(scene.notes)
         else:
@@ -932,6 +980,8 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
         return super(Ui_multiVisionShow, self).eventFilter(source, event)
 
     def loadScene(self, scene: Mv_Scene):
+        graphics_scene = QtWidgets.QGraphicsScene()
+
         if scene.scene_type == Scene_Type.STILL:
             pixmap = QtGui.QPixmap()
             pixmap.load(scene.source)
@@ -944,12 +994,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                 pixmap,
                 QtCore.Qt.TransformationMode.SmoothTransformation))
             image_item.setGraphicsEffect(self.opacityEffect)
-            graphics_scene = QtWidgets.QGraphicsScene()
             graphics_scene.addItem(image_item)
-
-            self.graphicsView.items().clear()
-            self.graphicsView.viewport().update()
-            self.graphicsView.setScene(graphics_scene)
 
         elif scene.scene_type == Scene_Type.VIDEO:
             # TODO: Check if MIME Type of scene.source is supported and the file exists
@@ -985,14 +1030,13 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             video_item.setGraphicsEffect(self.opacityEffect)
             self.videoPlayer.setVideoOutput(video_item)
 
-            graphics_scene = QtWidgets.QGraphicsScene()
             graphics_scene.addItem(video_item)
 
-            self.graphicsView.items().clear()
-            self.graphicsView.viewport().update()
-            self.graphicsView.setScene(graphics_scene)
-
             self.videoPlayer.play()
+
+        self.graphicsView.items().clear()
+        self.graphicsView.viewport().update()
+        self.graphicsView.setScene(graphics_scene)
 
         self.scene_fade_in_anim.start()
 
