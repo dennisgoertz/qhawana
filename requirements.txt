@@ -5,3 +5,5 @@ av~=14.0.1
 packaging~=24.2
 pillow~=11.1.0
 PySide6~=6.8.1.1
+xmlschema~=3.4.3
+gpxpy~=1.6.2

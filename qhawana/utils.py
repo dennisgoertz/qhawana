@@ -3,8 +3,14 @@ from typing import Optional
 
 import PIL.ImageQt
 import av
+import xmlschema
+import gpxpy
 
-from PySide6 import QtCore, QtWidgets, QtGui, QtMultimedia
+from PySide6 import QtCore, QtWidgets, QtGui, QtMultimedia, QtPositioning
+
+import importlib.resources
+
+res = importlib.resources.files("resources")
 
 
 def forEachItemInModel(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):
@@ -18,7 +24,7 @@ def forEachItemInModel(model: QtCore.QAbstractItemModel, parent=QtCore.QModelInd
             yield None, data
 
 
-def countRowsOfIndex(index=QtCore.QModelIndex()):
+def countRowsOfIndex(index=QtCore.QModelIndex()) -> int:
     count: int = 0
     model: QtCore.QAbstractItemModel = index.model()
     if model is None:
@@ -32,7 +38,7 @@ def countRowsOfIndex(index=QtCore.QModelIndex()):
 
 def scalePixmapToWidget(widget: QtWidgets.QWidget,
                         pixmap: QtGui.QPixmap,
-                        mode=QtCore.Qt.TransformationMode.FastTransformation):
+                        mode=QtCore.Qt.TransformationMode.FastTransformation) -> QtGui.QPixmap:
     scaled_pixmap = pixmap.scaled(
         widget.size(),
         QtCore.Qt.AspectRatioMode.KeepAspectRatio,
@@ -65,7 +71,7 @@ def getKeyframeFromVideo(path) -> Optional[QtGui.QImage]:
     return image
 
 
-def get_supported_mime_types() -> list:
+def get_supported_mime_types() -> list[str]:
     result = []
     for f in QtMultimedia.QMediaFormat().supportedFileFormats(QtMultimedia.QMediaFormat.ConversionMode.Decode):
         mime_type = QtMultimedia.QMediaFormat(f).mimeType()
@@ -73,7 +79,7 @@ def get_supported_mime_types() -> list:
     return result
 
 
-def timeStringFromMsec(msec: int):
+def timeStringFromMsec(msec: int) -> str:
     minutes = msec // 60000
     seconds = (msec // 1000) % 60
     milliseconds = msec % 1000
@@ -81,7 +87,7 @@ def timeStringFromMsec(msec: int):
     return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
 
-def getFileHashSHA1(path: str, used_for_security=True):
+def getFileHashSHA1(path: str, used_for_security=True) -> str:
     buf_size = 65536
 
     file_sha1 = hashlib.sha1(usedforsecurity=used_for_security)
@@ -93,3 +99,25 @@ def getFileHashSHA1(path: str, used_for_security=True):
             file_sha1.update(data)
 
     return file_sha1.hexdigest()
+
+
+def validateGPX(path: str) -> bool:
+    schema_1_0 = xmlschema.XMLSchema(str(res / "gpx-1.0-strict.xsd"))
+    schema_1_1 = xmlschema.XMLSchema(str(res / "gpx-1.1-strict.xsd"))
+
+    return schema_1_0.is_valid(path) or schema_1_1.is_valid(path)
+
+
+def geoPathFromGPX(path) -> QtPositioning.QGeoPath:
+    gpx = gpxpy.parse(open(path))
+
+    geo_path = QtPositioning.QGeoPath()
+    for point in gpx.waypoints:
+        if point.elevation:
+            geo_coordinate = QtPositioning.QGeoCoordinate(point.latitude, point.longitude, point.elevation)
+        else:
+            geo_coordinate = QtPositioning.QGeoCoordinate(point.latitude, point.longitude
+                                                          )
+        geo_path.addCoordinate(geo_coordinate)
+
+    return geo_path

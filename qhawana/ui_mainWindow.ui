@@ -570,6 +570,12 @@
           <height>0</height>
          </size>
         </property>
+        <property name="verticalScrollBarPolicy">
+         <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+        </property>
+        <property name="horizontalScrollBarPolicy">
+         <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+        </property>
        </widget>
       </item>
       <item row="3" column="0" rowspan="5" colspan="3">

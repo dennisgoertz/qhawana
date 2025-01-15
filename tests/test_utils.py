@@ -100,3 +100,9 @@ def test_get_file_hash_sha1():
 
     file_hash = getFileHashSHA1(str(res / "Qhawana_Icon_16.png"), used_for_security=False)
     assert file_hash == "f4893ed76b4efc38168f6069e808affd9ee20ab1", "getFileHashSHA1 did not return the correct value"
+
+
+def test_validate_GPX():
+    from utils import validateGPX
+
+    assert validateGPX(str(res / "fells_loop.gpx"))

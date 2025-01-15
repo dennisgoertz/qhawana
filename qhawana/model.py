@@ -1,13 +1,283 @@
 import json
 import os
+import sys
 from typing import Optional
 
 import av
-from PySide6 import QtCore, QtGui
+import exiftool
+import mimetypes
 
-from qhawana.const import Constants, Scene_Type, Show_States
+from PySide6 import QtCore, QtGui, QtPositioning
+
+from qhawana.const import Constants, Bin_Type, Scene_Type, Show_States
 from qhawana.utils import (timeStringFromMsec, getFileHashSHA1, countRowsOfIndex, forEachItemInModel,
-                           getKeyframeFromVideo)
+                           getKeyframeFromVideo, validateGPX, get_supported_mime_types, geoPathFromGPX)
+
+
+class BinItem(QtGui.QStandardItem):
+    def __init__(self, *__args):
+        super().__init__(*__args)
+        self.category = Bin_Type.EMPTY
+        self.setDropEnabled(False)
+
+    @classmethod
+    def fromFile(cls, path):
+        if os.path.isfile(path):
+            file = os.path.basename(path)
+        else:
+            return None
+
+        mimetype, encoding = mimetypes.guess_type(path)
+        pixmap = None
+
+        if mimetype is None:
+            if path.endswith(".gpx") and validateGPX(path):
+                bin_item = cls(file)
+                bin_item.category = Bin_Type.TRACK
+                bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
+                return bin_item
+            else:
+                QtCore.qWarning(f"Failed to get Mimetype for {file}.")
+                return None
+
+        if mimetype.startswith("image/"):
+            bin_item = cls(file)
+            bin_item.category = Bin_Type.STILL
+            bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
+            pixmap = QtGui.QPixmap(path).scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
+                                                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                                QtCore.Qt.TransformationMode.FastTransformation)
+
+        elif mimetype.startswith("video/") and mimetype in get_supported_mime_types():
+            bin_item = cls(file)
+            bin_item.category = Bin_Type.VIDEO
+            bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
+            keyframe_image = getKeyframeFromVideo(path)
+            pixmap = (QtGui.QPixmap().fromImage(keyframe_image).
+                      scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
+                             QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                             QtCore.Qt.TransformationMode.FastTransformation))
+
+        elif mimetype.startswith("audio/"):
+            bin_item = cls(file)
+            bin_item.category = Bin_Type.AUDIO
+            bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
+
+        else:
+            QtCore.qDebug(f"File {file.encode(errors='ignore')} ({mimetype}) is not supported.")
+            return None
+
+        if pixmap:
+            tooltip_image = jsonValFromPixmap(pixmap)
+            html = f'<img src="data:image/png;base64,{tooltip_image}">'
+            bin_item.setData(html, QtCore.Qt.ItemDataRole.ToolTipRole)
+
+            icon = QtGui.QIcon()
+            icon.addPixmap(pixmap)
+            bin_item.setIcon(icon)
+
+        return bin_item
+
+
+class SceneItem(QtGui.QStandardItem):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scene_type = Scene_Type.EMPTY
+        self.scene = None
+        self.setDropEnabled(False)
+
+    @classmethod
+    def fromFile(cls, path):
+        if os.path.isfile(path):
+            file = os.path.basename(path)
+        else:
+            return None
+
+        mimetype, encoding = mimetypes.guess_type(path)
+
+        if mimetype is None:
+            if path.endswith(".gpx") and validateGPX(path):
+                scene_item = cls(file)
+                scene_item.scene_type = Scene_Type.MAP
+
+                gp = geoPathFromGPX(path)
+                center = gp.boundingGeoRectangle().center()
+
+                gi = QhawanaGraphicsSceneItem.fromObject(gp)
+
+                scene_item.scene = Mv_Scene(source=path,
+                                            scene_type=Scene_Type.MAP,
+                                            location=(center.latitude(), center.longitude()),
+                                            graphics_items=[gi])
+
+                return scene_item
+            else:
+                QtCore.qWarning(f"Failed to get Mimetype for {file}.")
+                return None
+
+        if mimetype.startswith("image/"):
+            scene_item = cls(file)
+            scene_item.scene_type = Scene_Type.STILL
+            audio_path = ""
+            pixmap = QtGui.QPixmap(path)
+
+            try:
+                exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
+            except exiftool.exceptions.ExifToolExecuteError:
+                QtCore.qWarning(f"Failed to get Exif data for file {path}")
+                exif_data = []
+
+            scene = Mv_Scene(source=path,
+                             audio_source=audio_path,
+                             pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
+                                                  QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                                  QtCore.Qt.TransformationMode.SmoothTransformation),
+                             scene_type=Scene_Type.STILL,
+                             exif=exif_data)
+
+        elif mimetype.startswith("video/") and mimetype in get_supported_mime_types():
+            scene_item = cls(file)
+            scene_item.scene_type = Scene_Type.VIDEO
+
+            keyframe_image = getKeyframeFromVideo(path)
+            pixmap = QtGui.QPixmap().fromImage(keyframe_image)
+
+            with av.open(path) as container:
+                if len(container.streams.video) == 0:
+                    QtCore.qDebug(f"Video file {path} does not contain a video stream")
+                    return None
+
+                # Set scene's play_video_audio property to True if the video has an audio stream:
+                play_video_audio = (len(container.streams.audio) > 0)
+
+                stream = container.streams.video[0]
+                duration = int(stream.duration * stream.time_base * 1000)
+                in_point = int(stream.start_time * stream.time_base * 1000)
+                out_point = duration - in_point
+
+            exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
+            scene = Mv_Scene(source=path,
+                             pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
+                                                  QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                                  QtCore.Qt.TransformationMode.SmoothTransformation),
+                             scene_type=Scene_Type.VIDEO,
+                             exif=exif_data,
+                             duration=duration,
+                             in_point=in_point,
+                             out_point=out_point,
+                             play_video_audio=play_video_audio)
+
+        else:
+            return None
+
+        scene_item.scene = scene
+
+        icon = QtGui.QIcon()
+        icon.addPixmap(pixmap.scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
+                                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                     QtCore.Qt.TransformationMode.SmoothTransformation),
+                       QtGui.QIcon.Mode.Normal,
+                       QtGui.QIcon.State.Off)
+
+        scene_item.setIcon(icon)
+
+        return scene_item
+
+    @classmethod
+    def fromJson(cls, json_dict):
+        if "pixmap" in json_dict and json_dict["pixmap"]:
+            pixmap = pixmapFromJsonVal(json_dict["pixmap"])
+        else:
+            if json_dict["scene_type"] == Scene_Type.VIDEO:
+                keyframe_image = getKeyframeFromVideo(json_dict["source"])
+                pixmap = QtGui.QPixmap().fromImage(keyframe_image)
+            elif json_dict["scene_type"] == Scene_Type.STILL:
+                pixmap = QtGui.QPixmap(json_dict["source"])
+            else:
+                pixmap = QtGui.QPixmap(100, 100)
+                pixmap.fill(QtGui.QColor("black"))
+        icon = QtGui.QIcon()
+        icon.addPixmap(pixmap.scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
+                                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                     QtCore.Qt.TransformationMode.SmoothTransformation),
+                       QtGui.QIcon.Mode.Normal,
+                       QtGui.QIcon.State.Off)
+
+        scene = Mv_Scene(source=json_dict["source"],
+                         scene_type=json_dict["scene_type"],
+                         pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
+                                              QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                              QtCore.Qt.TransformationMode.SmoothTransformation)
+                         )
+
+        if "play_video_audio" in json_dict:
+            scene.play_video_audio = json_dict["play_video_audio"]
+        elif scene.scene_type == Scene_Type.VIDEO:
+            with av.open(scene.source) as container:
+                # Set scene's play_video_audio property to True if the video has an audio stream:
+                scene.play_video_audio = (len(container.streams.audio) > 0)
+        if "audio_source" in json_dict:
+            scene.audio_source = json_dict["audio_source"]
+        if "pause" in json_dict:
+            scene.pause = json_dict["pause"]
+        if "duration" in json_dict:
+            scene.duration = json_dict["duration"]
+        if "in_point" in json_dict:
+            scene.in_point = json_dict["in_point"]
+        if "out_point" in json_dict:
+            scene.out_point = json_dict["out_point"]
+        if "notes" in json_dict:
+            scene.notes = json_dict["notes"]
+        if "exif" in json_dict:
+            scene.exif = json_dict["exif"]
+        if "source_hash" in json_dict:
+            scene.source_hash = json_dict["source_hash"]
+        if "audio_source_hash" in json_dict:
+            scene.audio_source_hash = json_dict["audio_source_hash"]
+        if "location" in json_dict:
+            scene.location = json_dict["location"]
+        if "scene_items" in json_dict:
+            scene.graphics_items = json_dict["scene_items"]
+
+        item = SceneItem(icon, json_dict["source"])
+        item.scene = scene
+        item.scene_type = scene.scene_type
+
+        return item
+
+
+class ProjectSettings(QtCore.QObject):
+    valueChanged = QtCore.Signal(str, object, name="valueChanged")
+
+    def __init__(self, parent=None):
+        self.__settings = {"transition_time": 1000, "default_delay": 5000}
+        super().__init__(parent)
+
+    def toJson(self) -> {str}:
+        return {"settings": json.dumps(self.__settings)}
+
+    def fromJson(self, json_string: {str}):
+        for setting, value in json.loads(json_string).items():
+            self.setProperty(setting, value)
+
+    def getProperty(self, property_name: str):
+        try:
+            return self.__settings[property_name]
+        except KeyError:
+            return None
+
+    def setProperty(self, property_name: str, value) -> bool:
+        old_value = self.getProperty(property_name)
+        if old_value == value:
+            return False
+        try:
+            self.__settings[property_name] = value
+        except (TypeError, ValueError):
+            return False
+        else:
+            QtCore.qDebug(f'Setting "{property_name}" from "{old_value}" to "{value}"')
+            self.valueChanged.emit(property_name, value)
+            return True
 
 
 class Mv_Project(QtCore.QObject):
@@ -62,8 +332,9 @@ class Mv_Show(QtCore.QObject):
         num_scenes = len(json_string)
         for i, s in enumerate(json_string):
             progress_callback.emit((i + 1) // num_scenes * 100)
-            scene = sceneItemFromJson(s)
-            self.sequence.appendRow(scene)
+            scene = SceneItem.fromJson(s)
+            if scene:
+                self.sequence.appendRow(scene)
 
     def getScene(self, index=0):
         return self.sequence.item(index) if 0 <= index < self.length() else False
@@ -115,6 +386,10 @@ class Mv_sequence(QtCore.QAbstractTableModel):
                     return item_data.source
             elif role == QtCore.Qt.ItemDataRole.DecorationRole:
                 return item_data.icon
+            elif role == QtCore.Qt.ItemDataRole.ToolTipRole:
+                tooltip_image = jsonValFromPixmap(item_data.icon.pixmap(
+                    QtCore.QSize(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE)))
+                return f'<img src="data:image/png;base64,{tooltip_image}">'
         elif index.column() == 1:
             if role == QtCore.Qt.ItemDataRole.DisplayRole or role == QtCore.Qt.ItemDataRole.ToolTipRole:
                 return item_data.audio_source
@@ -213,12 +488,11 @@ class Mv_sequence(QtCore.QAbstractTableModel):
     def sceneCount(self) -> int:
         return len(self._scenes)
 
-    def appendRow(self, item: QtGui.QStandardItem):
+    def appendRow(self, item: SceneItem):
         length = self.rowCount()
         self.beginInsertRows(self.index(self.rowCount() - 1, 0), length, length)
-        scene = item.data()
-        self._scenes[scene.uuid] = scene
-        item.setData(scene.uuid, QtCore.Qt.ItemDataRole.UserRole)
+        self._scenes[item.scene.uuid] = item.scene
+        item.setData(item.scene.uuid, QtCore.Qt.ItemDataRole.UserRole)
         self._sequence.append(item)
         self.endInsertRows()
         self.rowsInserted.emit(QtCore.QModelIndex(), length, length)
@@ -270,7 +544,7 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
     def mimeTypes(self) -> list[str]:
         types = super().mimeTypes()
-        types.append("x-application-Qhawana-STILLS")
+        types.append("x-application-Qhawana-STILL")
         types.append("x-application-Qhawana-AUDIO")
         types.append("x-application-Qhawana-VIDEO")
 
@@ -324,10 +598,22 @@ class Mv_sequence(QtCore.QAbstractTableModel):
                 self.setData(self.index(row, column, parent), item_uuid, QtCore.Qt.ItemDataRole.UserRole)
             return True
 
-        elif data.hasFormat('x-application-Qhawana-STILLS'):
-            QtCore.qDebug("x-application-Qhawana-STILLS")
+        elif data.hasFormat('x-application-Qhawana-STILL') or data.hasFormat('x-application-Qhawana-VIDEO'):
+            QtCore.qDebug(data.formats()[0])
+            encoded = data.data(data.formats()[0])
+            stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.ReadOnly)
 
-            return True
+            path = stream.readQString()
+            scene_item = SceneItem.fromFile(path)
+
+            if scene_item:
+                item_uuid = scene_item.scene.uuid
+                self.insertRow(row, parent)
+                self._sequence[row].setData(item_uuid, QtCore.Qt.ItemDataRole.UserRole)
+                self._scenes[item_uuid] = scene_item.scene
+                return True
+            else:
+                return False
         elif data.hasFormat('x-application-Qhawana-AUDIO'):
             QtCore.qDebug("x-application-Qhawana-AUDIO")
 
@@ -395,7 +681,8 @@ class Mv_sequence(QtCore.QAbstractTableModel):
 
 class Mv_Scene(QtGui.QStandardItem):
     def __init__(self, source: str, scene_type: Scene_Type, audio_source="", pause=False, duration=-1,
-                 in_point=-1, out_point=-1, play_video_audio=False, pixmap=None, notes="", exif=None, parent=None):
+                 in_point=-1, out_point=-1, play_video_audio=False, pixmap=None, notes="", exif=None, parent=None,
+                 location=None, graphics_items=None):
 
         self.uuid = QtCore.QUuid().createUuid()
         self.source = source
@@ -411,13 +698,14 @@ class Mv_Scene(QtGui.QStandardItem):
         self.pixmap = pixmap
         self.notes = notes
         self.exif = exif
+        self.location = location
+        self.graphics_items = graphics_items
 
         if self.source:
             try:
                 source_hash = getFileHashSHA1(self.source, used_for_security=False)
             except FileNotFoundError:
                 QtCore.qWarning(f"Source file {self.source} not found for scene {self.uuid.toString()}")
-                pass
             else:
                 self.source_hash = source_hash
 
@@ -426,7 +714,6 @@ class Mv_Scene(QtGui.QStandardItem):
                 audio_source_hash = getFileHashSHA1(self.audio_source, used_for_security=False)
             except FileNotFoundError:
                 QtCore.qWarning(f"Audio source file {self.audio_source} not found for scene {self.uuid.toString()}")
-                pass
             else:
                 self.audio_source_hash = audio_source_hash
 
@@ -478,7 +765,9 @@ class Mv_Scene(QtGui.QStandardItem):
                      "out_point": self.out_point,
                      "play_video_audio": self.play_video_audio,
                      "notes": self.notes,
-                     "exif": self.exif}
+                     "exif": self.exif,
+                     "location": self.location,
+                     "scene_items": self.graphics_items}
         if store_pixmap and self.pixmap:
             json_dict["pixmap"] = jsonValFromPixmap(self.pixmap)
         else:
@@ -491,7 +780,8 @@ class ProjectBinModel(QtGui.QStandardItemModel):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.categoryItems = {"STILLS": None, "AUDIO": None, "VIDEO": None, "TRACKS": None}
+        self.categoryItems = {"STILL": None, "AUDIO": None, "VIDEO": None, "TRACK": None}
+        self.clear()
 
     def clear(self):
         super().clear()
@@ -513,8 +803,8 @@ class ProjectBinModel(QtGui.QStandardItemModel):
         return QtCore.Qt.DropAction.CopyAction | QtCore.Qt.DropAction.LinkAction
 
     def mimeTypes(self) -> list[str]:
-        types = ["x-application-Qhawana-STILLS", "x-application-Qhawana-AUDIO",
-                 "x-application-Qhawana-VIDEO", "x-application-Qhawana-TRACKS"]
+        types = ["x-application-Qhawana-STILL", "x-application-Qhawana-AUDIO",
+                 "x-application-Qhawana-VIDEO", "x-application-Qhawana-TRACK"]
 
         return types
 
@@ -530,14 +820,14 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                 parent_index = index.parent()
                 if parent_index.model() is not None:
                     parent_item = parent_index.model().itemData(parent_index)[0]
-                    if parent_item == "STILLS":
-                        format_type = "x-application-Qhawana-STILLS"
+                    if parent_item == "STILL":
+                        format_type = "x-application-Qhawana-STILL"
                     elif parent_item == "VIDEO":
                         format_type = "x-application-Qhawana-VIDEO"
                     elif parent_item == "AUDIO":
                         format_type = "x-application-Qhawana-AUDIO"
-                    elif parent_item == "TRACKS":
-                        format_type = "x-application-Qhawana-TRACKS"
+                    elif parent_item == "TRACK":
+                        format_type = "x-application-Qhawana-TRACK"
 
                 encoded = QtCore.QByteArray()
                 stream = QtCore.QDataStream(encoded, QtCore.QDataStream.OpenModeFlag.WriteOnly)
@@ -591,14 +881,13 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                     QtCore.qWarning(f"Skipping nonexistent item '{v}' for category '{category}'"
                                     f"when populating project bin")
 
-                file = os.path.basename(v)
-                bin_item = QtGui.QStandardItem(file)
+                bin_item = BinItem.fromFile(v)
                 pixmap = None
 
                 if category == "AUDIO":
                     pixmap = QtGui.QPixmap(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE)
                     pixmap.fill(QtGui.QColor("black"))
-                elif category == "STILLS":
+                elif category == "STILL":
                     pixmap = QtGui.QPixmap(v).scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
                                                      QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                                      QtCore.Qt.TransformationMode.FastTransformation)
@@ -608,7 +897,7 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                               scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
                                      QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                      QtCore.Qt.TransformationMode.FastTransformation))
-                elif category == "TRACKS":
+                elif category == "TRACK":
                     pass
 
                 if pixmap:
@@ -616,107 +905,46 @@ class ProjectBinModel(QtGui.QStandardItemModel):
                     html = f'<img src="data:image/png;base64,{tooltip_image}">'
                     bin_item.setData(html, QtCore.Qt.ItemDataRole.ToolTipRole)
 
-                bin_item.setData(v, QtCore.Qt.ItemDataRole.UserRole)
                 self.categoryItems[category].appendRow(bin_item)
 
         self.endResetModel()
 
 
-class BinItem(QtGui.QStandardItem):
-    def __init__(self, *__args):
-        super().__init__(*__args)
-
-
-class ProjectSettings(QtCore.QObject):
-    valueChanged = QtCore.Signal(str, list[str], name="valueChanged")
-
+class QhawanaGraphicsSceneItem(QtCore.QObject):
     def __init__(self, parent=None):
-        self.__settings = {"transition_time": 1000, "default_delay": 5000}
         super().__init__(parent)
+        self.item_class = None
+        self.item_data = []
 
-    def toJson(self) -> {str}:
-        return {"settings": json.dumps(self.__settings)}
+    def __getstate__(self):
+        return self.item_class, self.item_data
 
-    def fromJson(self, json_string: {str}):
-        for setting, value in json.loads(json_string).items():
-            self.setProperty(setting, value)
+    def __setstate__(self, state):
+        self.item_class = state[0]
+        self.item_data = state[1]
 
-    def getProperty(self, property_name: str):
-        try:
-            return self.__settings[property_name]
-        except KeyError:
+    @classmethod
+    def fromObject(cls, qo: QtCore.QObject, parent=None):
+        i = cls(parent=parent)
+        i.item_class = qo.__class__
+        i.item_data = []
+
+        if type(qo) is QtPositioning.QGeoPath:
+            for gc in qo.path():
+                i.item_data.append((gc.latitude(), gc.longitude()))
+            return i
+        else:
             return None
 
-    def setProperty(self, property_name: str, value) -> bool:
-        old_value = self.getProperty(property_name)
-        if old_value == value:
-            return False
-        try:
-            self.__settings[property_name] = value
-        except (TypeError, ValueError):
-            return False
-        else:
-            QtCore.qDebug(f'Setting "{property_name}" from "{old_value}" to "{value}"')
-            self.valueChanged.emit(property_name, value)
-            return True
+    def toObject(self):
+        obj = self.item_class()
 
+        if type(obj) is QtPositioning.QGeoPath:
+            for i in self.item_data:
+                gc = QtPositioning.QGeoCoordinate(i[0], i[1])
+                obj.addCoordinate(gc)
 
-def sceneItemFromJson(json_dict: dict) -> Optional[QtGui.QStandardItem]:
-    if "pixmap" in json_dict and json_dict["pixmap"]:
-        pixmap = pixmapFromJsonVal(json_dict["pixmap"])
-    else:
-        if json_dict["scene_type"] == Scene_Type.VIDEO:
-            keyframe_image = getKeyframeFromVideo(json_dict["source"])
-            pixmap = QtGui.QPixmap().fromImage(keyframe_image)
-        elif json_dict["scene_type"] == Scene_Type.STILL:
-            pixmap = QtGui.QPixmap(json_dict["source"])
-        else:
-            pixmap = QtGui.QPixmap(100, 100)
-            pixmap.fill(QtGui.QColor("black"))
-    icon = QtGui.QIcon()
-    icon.addPixmap(pixmap.scaled(Constants.MV_ICON_SIZE, Constants.MV_ICON_SIZE,
-                                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                 QtCore.Qt.TransformationMode.SmoothTransformation),
-                   QtGui.QIcon.Mode.Normal,
-                   QtGui.QIcon.State.Off)
-
-    scene = Mv_Scene(source=json_dict["source"],
-                     scene_type=json_dict["scene_type"],
-                     pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
-                                          QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                          QtCore.Qt.TransformationMode.SmoothTransformation)
-                     )
-
-    if "play_video_audio" in json_dict:
-        scene.play_video_audio = json_dict["play_video_audio"]
-    elif scene.scene_type == Scene_Type.VIDEO:
-        with av.open(scene.source) as container:
-            # Set scene's play_video_audio property to True if the video has an audio stream:
-            scene.play_video_audio = (len(container.streams.audio) > 0)
-    if "audio_source" in json_dict:
-        scene.audio_source = json_dict["audio_source"]
-    if "pause" in json_dict:
-        scene.pause = json_dict["pause"]
-    if "duration" in json_dict:
-        scene.duration = json_dict["duration"]
-    if "in_point" in json_dict:
-        scene.in_point = json_dict["in_point"]
-    if "out_point" in json_dict:
-        scene.out_point = json_dict["out_point"]
-    if "notes" in json_dict:
-        scene.notes = json_dict["notes"]
-    if "exif" in json_dict:
-        scene.exif = json_dict["exif"]
-    if "source_hash" in json_dict:
-        scene.source_hash = json_dict["source_hash"]
-    if "audio_source_hash" in json_dict:
-        scene.audio_source_hash = json_dict["audio_source_hash"]
-
-    item = QtGui.QStandardItem(icon, json_dict["source"])
-    item.setDropEnabled(False)
-    item.setData(scene)
-
-    return item
+        return obj
 
 
 def jsonValFromPixmap(pixmap: QtGui.QPixmap) -> str:
@@ -731,7 +959,7 @@ def jsonValFromPixmap(pixmap: QtGui.QPixmap) -> str:
     #
     # decoder = QtCore.QStringDecoder(QtCore.QStringDecoder.Encoding.Latin1)
     # return decoder(ba1)
-    
+
     return ba1.data().decode('Latin1')
 
 
@@ -739,6 +967,6 @@ def pixmapFromJsonVal(val: str) -> QtGui.QPixmap:
     encoded = val.encode('latin-1')
 
     pixmap = QtGui.QPixmap()
-    pixmap.loadFromData(QtCore.QByteArray.fromBase64(encoded), "PNG")
+    pixmap.loadFromData(QtCore.QByteArray.fromBase64(encoded))
 
     return pixmap

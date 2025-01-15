@@ -72,7 +72,7 @@ class SceneTableWidget(QtWidgets.QTableView):
         else:
             formats = e.mimeData().formats()
             QtCore.qDebug(f"Entered external drag from {e.source()} with MIME {e.mimeData().formats()}")
-            if ("x-application-Qhawana-STILLS" in formats or
+            if ("x-application-Qhawana-STILL" in formats or
                     "x-application-Qhawana-VIDEO" in formats or
                     "x-application-Qhawana-AUDIO" in formats):
                 e.accept()
@@ -87,7 +87,7 @@ class SceneTableWidget(QtWidgets.QTableView):
 
             formats = e.mimeData().formats()
             if (index.isValid() and (
-                    ("x-application-Qhawana-STILLS" in formats or
+                    ("x-application-Qhawana-STILL" in formats or
                      "x-application-Qhawana-VIDEO" in formats) and
                     index.column() == 0) or
                     ("x-application-Qhawana-AUDIO" in formats and

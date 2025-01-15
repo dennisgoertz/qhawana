@@ -1,4 +1,5 @@
 import importlib.resources
+
 res = importlib.resources.files("resources")
 
 
@@ -28,14 +29,14 @@ def test_mv_show(qtbot):
 
 
 def test_mv_sequence(qtmodeltester):
-    from model import Mv_sequence, Mv_Scene, BinItem
+    from model import Mv_sequence, Mv_Scene, SceneItem
     from const import Scene_Type
 
     model = Mv_sequence()
     for i in range(3):
-        item = BinItem(str(i))
+        item = SceneItem(str(i))
         scene = Mv_Scene(str(res / "Qhawana_Icon_16.png"), Scene_Type.STILL)
-        item.setData(scene)
+        item.scene = scene
         model.appendRow(item)
 
     # qtmodeltester.check(model, force_py=True)
@@ -86,3 +87,14 @@ def test_project_settings(qtbot):
 
     with qtbot.waitSignal((settings.valueChanged, "valueChanged"), timeout=10, check_params_cb=check_signal):
         settings.setProperty("unit_test_signal", "slot")
+
+
+def test_qhawana_graphics_scene_item():
+    from model import QhawanaGraphicsSceneItem
+    from qhawana.utils import geoPathFromGPX
+
+    gp = geoPathFromGPX(str(res / "fells_loop.gpx"))
+    i = QhawanaGraphicsSceneItem.fromObject(gp)
+    j = i.toObject()
+    assert len(gp.path()) == len(j.path())
+    assert gp.length() == j.length()

@@ -10,6 +10,7 @@ class Scene_Type(enum.IntEnum):
     EMPTY = 0
     STILL = 1
     VIDEO = 2
+    MAP = 3
 
 
 class Bin_Type(enum.IntEnum):

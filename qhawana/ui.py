@@ -1,6 +1,6 @@
 import gzip
 import json
-import mimetypes
+import faulthandler
 import os
 import sys
 
@@ -9,18 +9,18 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from _typeshed import SupportsWrite
 
-import av
-import exiftool
-from PySide6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets, QtQuickWidgets
+from PySide6 import QtWidgets, QtMultimedia, QtCore, QtGui, QtMultimediaWidgets, QtQuickWidgets, QtPositioning
 
 from qhawana.const import Constants, Scene_Type, Show_States
-from qhawana.model import Mv_Project, Mv_Scene, BinItem
+from qhawana.model import Mv_Project, Mv_Scene, BinItem, SceneItem, QhawanaGraphicsSceneItem
 from qhawana.widgets import QhawanaSplash
 from qhawana.ui_mainWindow import Ui_mainWindow_Qhawana
 from qhawana.ui_multiVisionShow import Ui_Form_multiVisionShow
 from qhawana.ui_presenterView import Ui_Form_presenterView
-from qhawana.utils import get_supported_mime_types, getKeyframeFromVideo, scalePixmapToWidget, timeStringFromMsec, validateGPX
+from qhawana.utils import get_supported_mime_types, getKeyframeFromVideo, scalePixmapToWidget, timeStringFromMsec
+from qhawana.utils import geoPathFromGPX
 from qhawana.worker import Worker
+from qhawana.map import PyQMLBridge
 
 import importlib.resources
 
@@ -28,8 +28,9 @@ res = importlib.resources.files("resources")
 
 
 class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
-    def __init__(self):
+    def __init__(self, parent=None):
         QtWidgets.QMainWindow.__init__(self)
+        self.setParent(parent)
         self.setupUi(self)
 
         self.setWindowIcon(QtGui.QIcon(str(res / "Qhawana_Icon_32.png")))
@@ -38,8 +39,10 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.pushButton_playPausePreview.setIcon(
             self.pushButton_playPausePreview.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaPlay))
 
-        self.project = Mv_Project()
-        self.project.bin.clear()
+        self.project = None
+        self.scenes_selection_model = None
+        self.bin_selection_model = None
+
         self.pv = Ui_presenterView(parent=self)
         self.changes_saved = True
         self.supported_mime_types = get_supported_mime_types()
@@ -52,8 +55,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.pushButton_outPoint.clicked.connect(self.setVideoOutPoint)
         self.videoTimer = QtCore.QTimer()
 
-        self.listView_filmStrip.setModel(self.project.mv_show.sequence)
-        self.tableView_scenes.setModel(self.project.mv_show.sequence)
         self.tableView_scenes.setSelectionMode(self.tableView_scenes.SelectionMode.ContiguousSelection)
         self.tableView_scenes.setSelectionBehavior(self.tableView_scenes.SelectionBehavior.SelectRows)
         self.tableView_scenes.setDragDropMode(self.tableView_scenes.DragDropMode.DragDrop)
@@ -67,8 +68,8 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.tableView_scenes.setAcceptDrops(True)
         self.tableView_scenes.setSortingEnabled(True)
 
-        self.treeView.setModel(self.project.bin)
         self.treeView.header().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.treeView_selection = self.treeView.selectionModel()
 
         self.threadpool = QtCore.QThreadPool().globalInstance()
         QtCore.qDebug("Multithreading with maximum %d threads" % self.threadpool.maxThreadCount())
@@ -85,18 +86,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 
         self.pushButton_mediaSourceDirectory.clicked.connect(self.sceneFromDirectoryDialog)
         self.pushButton_startShow.clicked.connect(self.openPresenterView)
-        self.project.mv_show.sequence.dataChanged.connect(self.changed)
-        self.project.mv_show.sequence.layoutChanged.connect(self.changed)
-        self.project.mv_show.sequence.rowsInserted.connect(self.changed)
-        self.project.mv_show.sequence.rowsRemoved.connect(self.changed)
-        self.project.settings.valueChanged.connect(self.changed)
-        self.project.mv_show.sequence.rowsRemoved.connect(self.showScenePreview)
-        self.tableView_scenes.selectionModel().selectionChanged.connect(self.syncSelection)
-        self.tableView_scenes.selectionModel().selectionChanged.connect(self.showScenePreview)
-        self.listView_filmStrip.selectionModel().selectionChanged.connect(self.syncSelection)
-        self.listView_filmStrip.selectionModel().selectionChanged.connect(self.showScenePreview)
-        self.treeView.selectionModel().selectionChanged.connect(self.showBinPreview)
-        self.project.mv_show.sequence.rowsInserted.connect(self.tableView_scenes.resizeColumnsToContents)
+
         self.textEdit_notes.textChanged.connect(self.updateSceneNotes)
         self.actionNew.triggered.connect(self.newProject)
         self.actionOpen.triggered.connect(self.loadFromFile)
@@ -104,12 +94,13 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.actionSave_As.triggered.connect(self.saveAsFileDialog)
         self.actionQuit.triggered.connect(self.quitProject, QtCore.Qt.ConnectionType.QueuedConnection)
         self.actionAbout_Qhawana.triggered.connect(splash_screen.show)
-        self.project.settings.valueChanged.connect(self.settingsChanged)
 
         self.spinBox_transitionTime.valueChanged.connect(
             lambda x: self.project.settings.setProperty("transition_time", x))
         self.spinBox_defaultDelay.valueChanged.connect(
             lambda x: self.project.settings.setProperty("default_delay", x))
+
+        self.newProject()
 
     def resizeEvent(self, event):
         # Override QMainWindow's resizeEvent handler to
@@ -126,14 +117,40 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
     def settingsChanged(self, setting, value):
         if setting == "save_file":
             self.setWindowTitle(f"Qhawana - {value}")
+        elif setting == "transition_time":
+            self.pv.mv.scene_fade_in_anim.setDuration(value)
+            self.pv.mv.scene_fade_out_anim.setDuration(value // 4)
 
     def newProject(self):
         if self.changes_saved:
             QtCore.qDebug("Creating new project")
             self.project = Mv_Project()
+
+            self.scenes_selection_model = QtCore.QItemSelectionModel(self.project.mv_show.sequence)
+            self.bin_selection_model = QtCore.QItemSelectionModel(self.project.bin)
             self.listView_filmStrip.setModel(self.project.mv_show.sequence)
+            self.listView_filmStrip.setSelectionModel(self.scenes_selection_model)
             self.tableView_scenes.setModel(self.project.mv_show.sequence)
+            self.tableView_scenes.setSelectionModel(self.scenes_selection_model)
             self.treeView.setModel(self.project.bin)
+            self.treeView.setSelectionModel(self.bin_selection_model)
+
+            self.project.mv_show.sequence.dataChanged.connect(self.changed)
+            self.project.mv_show.sequence.layoutChanged.connect(self.changed)
+            self.project.mv_show.sequence.rowsInserted.connect(self.changed)
+            self.project.mv_show.sequence.rowsRemoved.connect(self.changed)
+            self.project.settings.valueChanged.connect(self.changed)
+            self.project.mv_show.sequence.rowsRemoved.connect(self.showScenePreview)
+            self.project.settings.valueChanged.connect(self.settingsChanged)
+            self.project.mv_show.sequence.rowsInserted.connect(self.tableView_scenes.resizeColumnsToContents)
+            self.scenes_selection_model.selectionChanged.connect(self.showScenePreview)
+            self.scenes_selection_model.selectionChanged.connect(self.bin_selection_model.clearSelection)
+            self.bin_selection_model.selectionChanged.connect(self.showBinPreview)
+            self.bin_selection_model.selectionChanged.connect(self.scenes_selection_model.clearSelection)
+
+            self.project.mv_show.state_changed.connect(self.pv.progressBar_state.setFormat)
+            self.project.mv_show.state_changed.connect(lambda x: self.pv.scene_runner(self.pv.current_scene))
+
             self.scene_index = 0
             self.setWindowTitle("Qhawana")
             self.resetProgressBar()
@@ -312,112 +329,15 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                 # We are not interested in certain files like XMP or our own project files
                 continue
 
-            mimetype, encoding = mimetypes.guess_type(path)
+            bin_item = BinItem.fromFile(path)
+            if bin_item:
+                category_item = self.project.bin.findItems(bin_item.category.name,
+                                                           QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
+                category_item.appendRow(bin_item)
 
-            if mimetype is None:
-                if path.endswith(".gpx") and validateGPX(path):
-                    bin_item = BinItem(file).fromGPX(path)
-                    bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
-                    parent = self.project.bin.findItems("TRACKS", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
-                    parent.appendRow(bin_item)
-                    QtCore.qDebug(f"Adding track file {path} to project bin")
-                else:
-                    QtCore.qWarning(f"Failed to get Mimetype for {file}.")
-                    # TODO: Could there be cases where we would want to process
-                    #  the file even if we don't know the MIME type?
-                continue
-
-            if mimetype.startswith("image/"):
-                audio_path = ""
-                pixmap = QtGui.QPixmap(path)
-
-                try:
-                    exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
-                except exiftool.exceptions.ExifToolExecuteError:
-                    QtCore.qWarning(f"Failed to get Exif data for file {path}")
-                    exif_data = []
-
-                scene = Mv_Scene(source=path,
-                                 audio_source=audio_path,
-                                 pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
-                                                      QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                                      QtCore.Qt.TransformationMode.SmoothTransformation),
-                                 scene_type=Scene_Type.STILL,
-                                 exif=exif_data)
-                QtCore.qDebug(f"Adding image scene from file {path}")
-
-                bin_item = BinItem(file)
-                bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
-                bin_item.setDragEnabled(True)
-                bin_item.setDropEnabled(False)
-
-                parent = self.project.bin.findItems("STILLS", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
-                parent.appendRow(bin_item)
-
-                QtCore.qDebug(f"Adding image file {path} to project bin")
-            elif mimetype.startswith("video/") and mimetype in self.supported_mime_types:
-                keyframe_image = getKeyframeFromVideo(path)
-                pixmap = QtGui.QPixmap().fromImage(keyframe_image)
-
-                with av.open(path) as container:
-                    if len(container.streams.video) == 0:
-                        QtCore.qDebug(f"Video file {path} does not contain a video stream")
-                        continue
-
-                    # Set scene's play_video_audio property to True if the video has an audio stream:
-                    play_video_audio = (len(container.streams.audio) > 0)
-
-                    stream = container.streams.video[0]
-                    duration = int(stream.duration * stream.time_base * 1000)
-                    in_point = int(stream.start_time * stream.time_base * 1000)
-                    out_point = duration - in_point
-
-                exif_data = exiftool.ExifToolHelper().get_metadata(path)[0]
-                scene = Mv_Scene(source=path,
-                                 pixmap=pixmap.scaled(Constants.MV_PREVIEW_SIZE, Constants.MV_PREVIEW_SIZE,
-                                                      QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                                      QtCore.Qt.TransformationMode.SmoothTransformation),
-                                 scene_type=Scene_Type.VIDEO,
-                                 exif=exif_data,
-                                 duration=duration,
-                                 in_point=in_point,
-                                 out_point=out_point,
-                                 play_video_audio=play_video_audio)
-                QtCore.qDebug(f"Adding video scene from file {path} with duration {duration} ms, "
-                              f"in point {in_point} ms and out point {out_point} ms")
-
-                bin_item = BinItem(file)
-                bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
-
-                bin_item.setDragEnabled(True)
-                bin_item.setDropEnabled(False)
-
-                parent = self.project.bin.findItems("VIDEO", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
-                parent.appendRow(bin_item)
-
-                QtCore.qDebug(f"Adding video file {path} to project bin")
-            elif mimetype.startswith("audio/"):
-                bin_item = BinItem(file)
-                bin_item.setData(path, QtCore.Qt.ItemDataRole.UserRole)
-                bin_item.setDragEnabled(True)
-                bin_item.setDropEnabled(False)
-
-                parent = self.project.bin.findItems("AUDIO", QtCore.Qt.MatchFlag.MatchExactly, 0)[0]
-                parent.appendRow(bin_item)
-
-                QtCore.qDebug(f"Adding audio file {path} to project bin")
-                # Audio items will only be added to the project bin, but no scene item will be created, so continue:
-                continue
-            else:
-                QtCore.qDebug(f"File {file.encode(errors='ignore')} ({mimetype}) is not supported.")
-                # Files with MIME types that we do not understand will be ignored, so continue:
-                continue
-
-            scene_item = QtGui.QStandardItem(file)
-            scene_item.setData(scene)
-            scene_item.setDropEnabled(False)
-
-            self.project.mv_show.sequence.appendRow(scene_item)
+            scene_item = SceneItem.fromFile(path)
+            if scene_item:
+                self.project.mv_show.sequence.appendRow(scene_item)
 
         return True
 
@@ -439,6 +359,7 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             if len(self.screens) > 1:
                 qr = self.screens[0].geometry()
                 self.pv.move(qr.left(), qr.top())
+            self.pv.changeScene("first")
             self.pv.show()
         else:
             dialog = QtWidgets.QMessageBox(self)
@@ -459,58 +380,75 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
             self.pushButton_playPausePreview.setChecked(False)
             self.pushButton_inPoint.setEnabled(False)
             self.pushButton_outPoint.setEnabled(False)
-
-            bin_item = self.project.bin.itemFromIndex(bin_index)
-            parent = bin_item.parent() if bin_item else None
-
-            if parent:
-                parent_type = parent.data(QtCore.Qt.ItemDataRole.DisplayRole)
-                QtCore.qDebug(f"Showing preview for {parent_type} item {bin_index.row()} "
-                              f"({self.project.bin.rowCount(parent.index())} items in bin)")
-
-                graphics_scene = QtWidgets.QGraphicsScene()
-
-                if parent_type == "STILLS":
-                    self.pushButton_playPausePreview.setEnabled(False)
-                    self.horizontalSlider_videoPosition.setEnabled(False)
-                    self.videoPreviewPlayer.stop()
-                    self.videoPreviewPlayer.setSource(QtCore.QUrl())
-
-                    image_item = QtWidgets.QGraphicsPixmapItem()
-                    image_item.setPixmap(
-                        scalePixmapToWidget(self.graphicsView_preview,
-                                            QtGui.QPixmap(bin_item.data(QtCore.Qt.ItemDataRole.UserRole))))
-                    graphics_scene.addItem(image_item)
-
-                elif parent_type == "VIDEO":
-                    self.pushButton_playPausePreview.setEnabled(True)
-                    self.horizontalSlider_videoPosition.setEnabled(True)
-
-                    # TODO: Check if MIME Type of scene.source is supported and the file exists
-                    self.videoPreviewPlayer.setSource(
-                        QtCore.QUrl.fromLocalFile(bin_item.data(QtCore.Qt.ItemDataRole.UserRole)))
-
-                    video_item = QtMultimediaWidgets.QGraphicsVideoItem()
-                    video_item.setSize(self.graphicsView_preview.size().toSizeF())
-                    video_item.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-                    self.videoPreviewPlayer.setVideoOutput(video_item)
-
-                    self.videoPreviewPlayer.play()
-                    self.videoTimer.singleShot(100, self.videoPreviewPlayer.pause)
-
-                    graphics_scene.addItem(video_item)
-                elif parent_type == "TRACKS":
-                    qw = QtQuickWidgets.QQuickWidget(parent=None)
-                    qw.setFixedSize(self.graphicsView_preview.size())
-                    qw.setSource(QtCore.QUrl("map.qml"))
-
-                    graphics_scene.addWidget(qw)
-
-                self.graphicsView_preview.items().clear()
-                self.graphicsView_preview.viewport().update()
-                self.graphicsView_preview.setScene(graphics_scene)
         else:
             QtCore.qDebug("Invalid index, not showing preview")
+            return
+
+        bin_item = self.project.bin.itemFromIndex(bin_index)
+        if bin_item is None:
+            QtCore.qWarning("No bin item for index, not showing preview")
+            return
+
+        parent = bin_item.parent()
+        if parent is None:
+            QtCore.qDebug("Bin item has no parent, not showing preview")
+            return
+
+        parent_type = parent.data(QtCore.Qt.ItemDataRole.DisplayRole)
+        QtCore.qDebug(f"Showing preview for {parent_type} item {bin_index.row()} "
+                      f"({self.project.bin.rowCount(parent.index())} items in bin)")
+
+        graphics_scene = QtWidgets.QGraphicsScene()
+
+        if parent_type == "STILL":
+            self.pushButton_playPausePreview.setEnabled(False)
+            self.horizontalSlider_videoPosition.setEnabled(False)
+            self.videoPreviewPlayer.stop()
+            self.videoPreviewPlayer.setSource(QtCore.QUrl())
+
+            image_item = QtWidgets.QGraphicsPixmapItem()
+            image_item.setPixmap(
+                scalePixmapToWidget(self.graphicsView_preview,
+                                    QtGui.QPixmap(bin_item.data(QtCore.Qt.ItemDataRole.UserRole))))
+            graphics_scene.addItem(image_item)
+
+        elif parent_type == "VIDEO":
+            self.pushButton_playPausePreview.setEnabled(True)
+            self.horizontalSlider_videoPosition.setEnabled(True)
+
+            # TODO: Check if MIME Type of scene.source is supported and the file exists
+            self.videoPreviewPlayer.setSource(
+                QtCore.QUrl.fromLocalFile(bin_item.data(QtCore.Qt.ItemDataRole.UserRole)))
+
+            video_item = QtMultimediaWidgets.QGraphicsVideoItem()
+            video_item.setSize(self.graphicsView_preview.size().toSizeF())
+            video_item.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            self.videoPreviewPlayer.setVideoOutput(video_item)
+
+            self.videoPreviewPlayer.play()
+            self.videoTimer.singleShot(100, self.videoPreviewPlayer.pause)
+
+            graphics_scene.addItem(video_item)
+
+        elif parent_type == "TRACK":
+            br = PyQMLBridge()
+            qw = QtQuickWidgets.QQuickWidget(parent=None)
+            qw.engine().rootContext().setContextProperty("br", br)
+            qw.setFixedSize(self.graphicsView_preview.size())
+            qw.setSource(QtCore.QUrl("qhawana/map.qml"))
+
+            gp = geoPathFromGPX(bin_item.data(QtCore.Qt.ItemDataRole.UserRole))
+            br.drawPath(gp)
+            center = gp.boundingGeoRectangle().center()
+            if center:
+                br.setLocation(center.latitude(), center.longitude())
+                br.fitViewport()
+
+            graphics_scene.addWidget(qw)
+
+        self.graphicsView_preview.items().clear()
+        self.graphicsView_preview.viewport().update()
+        self.graphicsView_preview.setScene(graphics_scene)
 
     def showScenePreview(self, selection):
         if isinstance(selection, QtCore.QItemSelection) and len(selection.indexes()) > 0:
@@ -525,57 +463,83 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                           f"({self.project.mv_show.sequence.rowCount()} items in list, "
                           f"{self.project.mv_show.sequence.sceneCount()} scenes in show)")
             scene: Mv_Scene = self.project.mv_show.sequence.item(scene_index.row())
-
-            if scene:
-                self.scene_index = scene_index.row()
-
-                graphics_scene = QtWidgets.QGraphicsScene()
-
-                self.horizontalSlider_videoPosition.setValue(0)
-                self.pushButton_playPausePreview.setChecked(False)
-
-                if scene.scene_type == Scene_Type.STILL:
-                    self.pushButton_inPoint.setEnabled(False)
-                    self.pushButton_outPoint.setEnabled(False)
-                    self.pushButton_playPausePreview.setEnabled(False)
-                    self.horizontalSlider_videoPosition.setEnabled(False)
-                    self.videoPreviewPlayer.stop()
-                    self.videoPreviewPlayer.setSource(QtCore.QUrl())
-
-                    image_item = QtWidgets.QGraphicsPixmapItem()
-                    image_item.setPixmap(
-                        scalePixmapToWidget(self.graphicsView_preview,
-                                            getPixmapFromScene(scene)))
-                    graphics_scene.addItem(image_item)
-
-                elif scene.scene_type == Scene_Type.VIDEO:
-                    self.pushButton_inPoint.setEnabled(True)
-                    self.pushButton_outPoint.setEnabled(True)
-                    self.pushButton_playPausePreview.setEnabled(True)
-                    self.horizontalSlider_videoPosition.setEnabled(True)
-
-                    # TODO: Check if MIME Type of scene.source is supported and the file exists
-                    self.videoPreviewPlayer.setSource(QtCore.QUrl.fromLocalFile(scene.source))
-
-                    video_item = QtMultimediaWidgets.QGraphicsVideoItem()
-                    video_item.setSize(self.graphicsView_preview.size().toSizeF())
-                    video_item.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-                    self.videoPreviewPlayer.setVideoOutput(video_item)
-
-                    self.videoPreviewPlayer.play()
-                    if scene.in_point > 0:
-                        self.videoPreviewPlayer.setPosition(scene.in_point)
-                    self.videoTimer.singleShot(100, self.videoPreviewPlayer.pause)
-
-                    graphics_scene.addItem(video_item)
-
-                self.graphicsView_preview.items().clear()
-                self.graphicsView_preview.viewport().update()
-                self.graphicsView_preview.setScene(graphics_scene)
-
-                self.textEdit_notes.setText(scene.notes)
         else:
             QtCore.qDebug("Invalid index, not showing preview")
+            return
+
+        self.scene_index = scene_index.row()
+
+        graphics_scene = QtWidgets.QGraphicsScene()
+
+        self.horizontalSlider_videoPosition.setValue(0)
+        self.pushButton_playPausePreview.setChecked(False)
+
+        if scene.scene_type == Scene_Type.STILL:
+            self.pushButton_inPoint.setEnabled(False)
+            self.pushButton_outPoint.setEnabled(False)
+            self.pushButton_playPausePreview.setEnabled(False)
+            self.horizontalSlider_videoPosition.setEnabled(False)
+            self.videoPreviewPlayer.stop()
+            self.videoPreviewPlayer.setSource(QtCore.QUrl())
+
+            image_item = QtWidgets.QGraphicsPixmapItem()
+            image_item.setPixmap(
+                scalePixmapToWidget(self.graphicsView_preview,
+                                    getPixmapFromScene(scene)))
+            graphics_scene.addItem(image_item)
+
+        elif scene.scene_type == Scene_Type.VIDEO:
+            self.pushButton_inPoint.setEnabled(True)
+            self.pushButton_outPoint.setEnabled(True)
+            self.pushButton_playPausePreview.setEnabled(True)
+            self.horizontalSlider_videoPosition.setEnabled(True)
+
+            # TODO: Check if MIME Type of scene.source is supported and the file exists
+            self.videoPreviewPlayer.setSource(QtCore.QUrl.fromLocalFile(scene.source))
+
+            video_item = QtMultimediaWidgets.QGraphicsVideoItem()
+            video_item.setSize(self.graphicsView_preview.size().toSizeF())
+            video_item.setAspectRatioMode(QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            self.videoPreviewPlayer.setVideoOutput(video_item)
+
+            self.videoPreviewPlayer.play()
+            if scene.in_point > 0:
+                self.videoPreviewPlayer.setPosition(scene.in_point)
+            self.videoTimer.singleShot(100, self.videoPreviewPlayer.pause)
+
+            graphics_scene.addItem(video_item)
+
+        elif scene.scene_type == Scene_Type.MAP:
+            br = PyQMLBridge()
+            qw = QtQuickWidgets.QQuickWidget(parent=None)
+            qw.engine().rootContext().setContextProperty("br", br)
+            qw.setFixedSize(self.graphicsView_preview.size())
+            qw.setSource(QtCore.QUrl("qhawana/map.qml"))
+
+            if scene.location:
+                br.setLocation(scene.location[0], scene.location[1])
+
+            bounding_rect = QtPositioning.QGeoRectangle()
+            num_items = 0
+            for i in scene.graphics_items:
+                assert type(i) is QhawanaGraphicsSceneItem
+                if i.item_class is QtPositioning.QGeoPath:
+                    num_items += 1
+                    gp = i.toObject()
+                    bounding_rect.extendRectangle(gp.boundingGeoRectangle().topLeft())
+                    bounding_rect.extendRectangle(gp.boundingGeoRectangle().bottomRight())
+                    br.drawPath(gp)
+            if num_items > 0:
+                br.setLocation(bounding_rect.center().latitude(), bounding_rect.center().longitude())
+                br.fitViewport()
+
+            graphics_scene.addWidget(qw)
+
+        self.graphicsView_preview.items().clear()
+        self.graphicsView_preview.viewport().update()
+        self.graphicsView_preview.setScene(graphics_scene)
+
+        self.textEdit_notes.setText(scene.notes)
 
     def playPauseVideoPreview(self, checked):
         if checked:
@@ -621,26 +585,6 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                                                   self.horizontalSlider_videoPosition.value(),
                                                   QtCore.Qt.ItemDataRole.EditRole)
 
-    def syncSelection(self, selection):
-        indexes = selection.indexes()
-
-        selection = QtCore.QItemSelection()
-        selection_flags = (QtCore.QItemSelectionModel.SelectionFlag.Select |
-                           QtCore.QItemSelectionModel.SelectionFlag.Rows)
-
-        if len(indexes) > 0:
-            for i in indexes:
-                if i.isValid():
-                    selection.select(i, i)
-            if self.tableView_scenes.selectionModel().selection() != selection:
-                # self.tableView_scenes.blockSignals(True)
-                self.tableView_scenes.selectionModel().select(selection, selection_flags)
-                # self.tableView_scenes.blockSignals(False)
-            if self.listView_filmStrip.selectionModel().selection() != selection:
-                # self.listView_filmStrip.blockSignals(True)
-                self.listView_filmStrip.selectionModel().select(selection, selection_flags)
-                # self.listView_filmStrip.blockSignals(False)
-
     def updateSceneNotes(self):
         scene = self.project.mv_show.sequence.item(self.scene_index)
         if scene:
@@ -658,9 +602,9 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
 class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
     scene_changed = QtCore.Signal(int)
 
-    def __init__(self, parent: Ui_mainWindow):
+    def __init__(self, parent=None):
         QtWidgets.QWidget.__init__(self)
-        self.parent = parent
+        self.parent: Ui_mainWindow = parent
         self.setupUi(self)
 
         self.installEventFilter(self)
@@ -694,8 +638,6 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.pushButton_audio_fadeOut.clicked.connect(lambda x: self.controlAudio("fade_out"))
         self.dial_volume.valueChanged.connect(lambda x: self.controlAudio("volume"))
 
-        self.parent.project.mv_show.state_changed.connect(self.progressBar_state.setFormat)
-        self.parent.project.mv_show.state_changed.connect(lambda x: self.scene_runner())
         self.scene_changed.connect(self.scene_runner)
 
         self.audio_fade_in_anim = QtCore.QPropertyAnimation(self.mv.musicAudioOutput, b"volume")
@@ -721,7 +663,6 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.timer_connection = None
 
         self.updateDialPosition()
-        self.changeScene("first")
 
     def close(self):
         self.parent.project.mv_show.set_state(Show_States.STOPPED)
@@ -743,35 +684,37 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         return super(Ui_presenterView, self).eventFilter(source, event)
 
     def scene_runner(self, scene_index=None):
-        if self.parent.project.mv_show.state() == Show_States.RUNNING:
-            if scene_index is None:
-                self.mv.scene_fade_out_anim.start()
-                QtCore.qDebug(f"Fading out scene {self.current_scene}")
-            else:
-                scene = self.parent.project.mv_show.getScene(scene_index)
-                if scene.duration > 0 or scene.duration == -1:
-                    if 0 <= scene.in_point < scene.out_point:
-                        duration = scene.out_point - scene.in_point
-                    elif scene.duration == -1:
-                        duration = self.parent.project.settings.getProperty("default_delay")
-                    else:
-                        duration = scene.duration
-                    self.progress_animation.setDuration(duration)
-                    self.progress_animation.start()
-
-                    try:
-                        self.scene_timer.disconnect(self.timer_connection)
-                    except TypeError:
-                        pass
-                    self.scene_timer.stop()
-                    self.timer_connection = self.scene_timer.timeout.connect(self.scene_runner)
-                    self.scene_timer.setSingleShot(True)
-                    self.scene_timer.start(duration)
-
-                    QtCore.qDebug(f"Running scene {self.current_scene} for {timeStringFromMsec(duration)}")
-        else:
+        if self.parent.project.mv_show.state() != Show_States.RUNNING:
             self.progress_animation.stop()
             self.scene_timer.stop()
+            return
+
+        if scene_index is None:
+            self.mv.scene_fade_out_anim.start()
+            QtCore.qDebug(f"Fading out scene {self.current_scene}")
+            return
+
+        scene = self.parent.project.mv_show.getScene(scene_index)
+
+        if 0 <= scene.in_point < scene.out_point:
+            duration = scene.out_point - scene.in_point
+        elif scene.duration == -1:
+            duration = self.parent.project.settings.getProperty("default_delay")
+        else:
+            duration = scene.duration
+        self.progress_animation.setDuration(duration)
+        self.progress_animation.start()
+
+        try:
+            self.scene_timer.disconnect(self.timer_connection)
+        except TypeError:
+            pass
+        self.scene_timer.stop()
+        self.timer_connection = self.scene_timer.timeout.connect(self.scene_runner)
+        self.scene_timer.setSingleShot(True)
+        self.scene_timer.start(duration)
+
+        QtCore.qDebug(f"Running scene {self.current_scene} for {timeStringFromMsec(duration)}")
 
     def changeScene(self, action, index=None):
         length = self.parent.project.mv_show.length()
@@ -785,7 +728,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             self.current_scene -= 1
         elif action == "next" and self.current_scene < (length - 1):
             self.current_scene += 1
-        elif action == "seek" and type(index) is int and 0 <= index < length and index != self.current_scene:
+        elif action == "seek" and type(index) is int and 0 <= index < length:
             self.current_scene = index
         else:
             return False
@@ -799,10 +742,10 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.label_sceneCounter.setText(f"{self.current_scene + 1}/{length}")
         self.updatePresenterView(scene, prev_scene, next_scene)
 
-        if self.parent.project.mv_show.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
-            self.mv.loadScene(scene)
-            if self.parent.project.mv_show.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
-                self.parent.project.mv_show.set_state(Show_States.FINISHED)
+        # if self.parent.project.mv_show.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
+        self.mv.loadScene(scene)
+        if self.parent.project.mv_show.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
+            self.parent.project.mv_show.set_state(Show_States.FINISHED)
 
         QtCore.qDebug(f"Changing scene to {self.current_scene}")
         self.scene_changed.emit(self.current_scene)
@@ -899,11 +842,6 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.mv.scene_fade_out_anim.finished.connect(lambda: self.changeScene("next"))
 
         if state in [Show_States.STOPPED, Show_States.FINISHED]:
-            if len(self.parent.screens) > 1:
-                QtCore.qDebug("There is more than one screen. Moving show window to next screen.")
-                qr = self.parent.screens[1].geometry()
-                self.mv.move(qr.left(), qr.top())
-                # self.mv.showFullScreen()
             self.mv.show()
             self.parent.project.mv_show.set_state(Show_States.RUNNING)
         elif state == Show_States.PAUSED:
@@ -929,10 +867,11 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
 
 class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
-    def __init__(self, parent: Ui_presenterView):
+    def __init__(self, parent=None):
         QtWidgets.QWidget.__init__(self)
+        self.parent: Ui_presenterView = parent
         self.setupUi(self)
-        self.parent = parent
+
         self.installEventFilter(self)
 
         self.videoPlayer = QtMultimedia.QMediaPlayer(parent=self)
@@ -946,17 +885,15 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
 
         self.supported_mimetypes = get_supported_mime_types()
 
-        self.opacityEffect = QtWidgets.QGraphicsOpacityEffect()
+        self.opacityEffect = QtWidgets.QGraphicsOpacityEffect(parent=self)
 
-        self.scene_fade_in_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
+        self.scene_fade_in_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity", parent=self)
         self.scene_fade_in_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
-        self.scene_fade_in_anim.setDuration(self.parent.parent.project.settings.getProperty("transition_time"))
         self.scene_fade_in_anim.setStartValue(0)
         self.scene_fade_in_anim.setEndValue(1)
 
-        self.scene_fade_out_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity")
+        self.scene_fade_out_anim = QtCore.QPropertyAnimation(self.opacityEffect, b"opacity", parent=self)
         self.scene_fade_out_anim.setEasingCurve(QtCore.QEasingCurve.Type.Linear)
-        self.scene_fade_out_anim.setDuration(self.parent.parent.project.settings.getProperty("transition_time") // 4)
         self.scene_fade_out_anim.setStartValue(1)
         self.scene_fade_out_anim.setEndValue(0)
 
@@ -1032,7 +969,33 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
 
             graphics_scene.addItem(video_item)
 
-            self.videoPlayer.play()
+            self.manageVideoPlayback()
+
+        elif scene.scene_type == Scene_Type.MAP:
+            br = PyQMLBridge()
+            qw = QtQuickWidgets.QQuickWidget(parent=None)
+            qw.engine().rootContext().setContextProperty("br", br)
+            qw.setFixedSize(self.graphicsView.size())
+            qw.setSource(QtCore.QUrl("qhawana/map.qml"))
+
+            if scene.location:
+                br.setLocation(scene.location[0], scene.location[1])
+
+            bounding_rect = QtPositioning.QGeoRectangle()
+            num_items = 0
+            for i in scene.graphics_items:
+                assert type(i) is QhawanaGraphicsSceneItem
+                if i.item_class is QtPositioning.QGeoPath:
+                    num_items += 1
+                    gp = i.toObject()
+                    bounding_rect.extendRectangle(gp.boundingGeoRectangle().topLeft())
+                    bounding_rect.extendRectangle(gp.boundingGeoRectangle().bottomRight())
+                    br.drawPath(gp)
+            if num_items > 0:
+                br.setLocation(bounding_rect.center().latitude(), bounding_rect.center().longitude())
+                br.fitViewport()
+
+            graphics_scene.addWidget(qw)
 
         self.graphicsView.items().clear()
         self.graphicsView.viewport().update()
@@ -1093,6 +1056,7 @@ def getPixmapFromScene(scene: Mv_Scene) -> QtGui.QPixmap:
 
 
 def launcher(args, show_splash=True):
+    faulthandler.enable()
     ui = Ui_mainWindow()
 
     if show_splash:
