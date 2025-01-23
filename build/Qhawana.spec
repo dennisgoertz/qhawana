@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_submodules
 
 datas = [('../assets/Qhawana_Logo.png', 'assets')]
-hiddenimports = ['av', 'hashlib', 'PIL.ImageQt', 'uuid']
+hiddenimports = ['av', 'hashlib', 'PIL.ImageQt', 'uuid', 'pkg_resources.extern']
 datas += collect_data_files('qtmodern')
 hiddenimports += collect_submodules('av')
 hiddenimports += collect_submodules('hashlib')
