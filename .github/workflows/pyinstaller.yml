@@ -1,4 +1,4 @@
-name: Build Windows exe with Pyinstaller on dev branch
+name: Pyinstaller on dev branch
 
 on:
   workflow_run:
