@@ -1,0 +1,21 @@
+name: Build Windows exe with Pyinstaller on dev branch
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [requested]
+    branches:
+      - 'dev/**'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: PyInstaller Windows
+      uses: JackMcKew/pyinstaller-action-windows@v0.1.2
+      with:
+        path: qhawana
+        spec: build/Qhawana.spec
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Qhawana.exe
+        path: build/dist/windows
