@@ -2,8 +2,8 @@ import enum
 
 
 class Constants(enum.IntEnum):
-    MV_ICON_SIZE = 100
-    MV_PREVIEW_SIZE = 800
+    MV_ICON_SIZE = 100      # maximum width and height of scene icons
+    MV_PREVIEW_SIZE = 800   # maximum width and height of scene previews
 
 
 class Scene_Type(enum.IntEnum):

@@ -1,5 +1,5 @@
 from PySide6 import QtWidgets, QtCore, QtGui
-
+from model import Mv_sequence
 
 class FilmStripWidget(QtWidgets.QListView):
     def __init__(self, parent=None):
@@ -11,6 +11,10 @@ class SceneTableWidget(QtWidgets.QTableView):
         super().__init__(parent)
         self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.DefaultContextMenu)
         self.horizontalHeader().setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.ActionsContextMenu)
+
+        self.context_menu = QtWidgets.QMenu(parent=self)
+        self.action_edit_scene = QtGui.QAction(self.tr("Edit scene"))
+        self.action_pan_zoom_effect = QtGui.QAction(self.tr("Pan and zoom effect"))
 
     def sortByColumn(self, column, order):
         popup = QtWidgets.QMessageBox(self)
@@ -30,16 +34,19 @@ class SceneTableWidget(QtWidgets.QTableView):
         handled = False
         index = self.indexAt(e.pos())
 
-        menu = QtWidgets.QMenu()
-        action_delete_scene = QtGui.QAction("Delete scene", menu)
+        self.context_menu.clear()
+        action_delete_scene = QtGui.QAction(self.tr("Delete scene"))
+        action_inherit_audio = QtGui.QAction(self.tr("Inherit audio from above"))
+
         action_delete_scene.triggered.connect(lambda x: self.model().deleteScene(index))
 
         if index.column() == 0:
-            action_edit_scene = QtGui.QAction("Edit scene", menu)
-            menu.addAction(action_edit_scene)
+            self.context_menu.addAction(self.action_edit_scene)
+            self.action_edit_scene.setData(index)
+            self.context_menu.addAction(self.action_pan_zoom_effect)
+            self.action_pan_zoom_effect.setData(index)
             handled = True
         elif index.column() == 1:
-            action_inherit_audio = QtGui.QAction("Inherit audio from above", menu)
             selected_rows = []
             item_selection = self.selectionModel().selection()
             for selected_index in item_selection.indexes():
@@ -47,13 +54,13 @@ class SceneTableWidget(QtWidgets.QTableView):
                     selected_rows.append(selected_index)
             if len(selected_rows) > 1:
                 action_inherit_audio.triggered.connect(lambda x: self.model().inheritAudio(selected_rows))
-                menu.addAction(action_inherit_audio)
+                self.context_menu.addAction(action_inherit_audio)
             handled = True
 
         if handled:
-            menu.addSeparator()
-            menu.addAction(action_delete_scene)
-            menu.exec(e.globalPos())
+            self.context_menu.addSeparator()
+            self.context_menu.addAction(action_delete_scene)
+            self.context_menu.exec(e.globalPos())
             e.accept()
         else:
             e.ignore()

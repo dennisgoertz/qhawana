@@ -17,10 +17,12 @@ from qhawana.widgets import QhawanaSplash
 from qhawana.ui_mainWindow import Ui_mainWindow_Qhawana
 from qhawana.ui_multiVisionShow import Ui_Form_multiVisionShow
 from qhawana.ui_presenterView import Ui_Form_presenterView
+from qhawana.form_panAndZoom import Ui_Form_PanAndZoomEffect
 from qhawana.utils import get_supported_mime_types, getKeyframeFromVideo, scalePixmapToWidget, timeStringFromMsec
 from qhawana.utils import geoPathFromGPX
 from qhawana.worker import Worker
 from qhawana.map import PyQMLBridge
+from qhawana.pan_and_zoom import pan_and_zoom
 
 import importlib.resources
 
@@ -95,12 +97,33 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
         self.actionQuit.triggered.connect(self.quitProject, QtCore.Qt.ConnectionType.QueuedConnection)
         self.actionAbout_Qhawana.triggered.connect(splash_screen.show)
 
+        self.tableView_scenes.context_menu.triggered.connect(self.sceneContextMenu)
+
         self.spinBox_transitionTime.valueChanged.connect(
             lambda x: self.project.settings.setProperty("transition_time", x))
         self.spinBox_defaultDelay.valueChanged.connect(
             lambda x: self.project.settings.setProperty("default_delay", x))
 
         self.newProject()
+
+    @QtCore.Slot()
+    def sceneContextMenu(self, signal: QtGui.QAction):
+        sender_widget = self.sender().parent()
+        sender_index = signal.data()
+
+        assert sender_widget in [self.tableView_scenes, self.listView_filmStrip]
+        assert isinstance(sender_index, QtCore.QModelIndex)
+
+        if signal.text() == "Pan and zoom effect":
+            scene = sender_widget.model().data(sender_index, QtCore.Qt.ItemDataRole.UserRole)
+            if not scene or scene.scene_type != Scene_Type.STILL:
+                QtCore.qWarning("Pan and zoom effect is only supported for Scene_Type.STILL")
+                return
+            form = Dialog_PanAndZoomEffect(parent=self)
+            form.setMinimumSize(QtCore.QSize(640, 480))
+            form.setSizeGripEnabled(True)
+            form.image.openImage(scene.pixmap)
+            form.exec()
 
     def resizeEvent(self, event):
         # Override QMainWindow's resizeEvent handler to
@@ -599,12 +622,85 @@ class Ui_mainWindow(QtWidgets.QMainWindow, Ui_mainWindow_Qhawana):
                                 " (" + self.tr("changed") + ")")
 
 
+class Dialog_PanAndZoomEffect(QtWidgets.QDialog, Ui_Form_PanAndZoomEffect):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.setupUi(self)
+
+        self.defaultBboxesLandscape = [QtCore.QRectF(0, 0.1, 1, 0.8), QtCore.QRectF(0.1, 0.1, 0.9, 0.8)]
+        self.defaultBboxesPortrait = [QtCore.QRectF(0, 0, 1, 0), QtCore.QRectF(0.05, 0.05, 0.9, 0)]
+
+        self.buttonSwapInOutEditor.clicked.connect(self.image.swapEditors)
+        self.buttonSwitchInOutEditor.clicked.connect(self.image.switchEditor)
+        self.buttonDone.clicked.connect(self.close)
+        self.image.bboxesChanged.connect(self.updateInfo)
+
+        self.targetRatioChanged = QtCore.Signal()
+        self._target_ratio = 16 / 10
+
+        bboxes = []
+        img_size = self.image.getImageSize()
+
+        if img_size.width() > img_size.height():
+            for bbox in self.defaultBboxesLandscape:
+                bboxes.append(QtCore.QRectF(bbox))
+            print('SetImageIdx() bboxes 2:', bboxes)
+        else:
+            try:
+                ratio_img = img_size.height() / img_size.width()
+            except ZeroDivisionError:
+                # FIXME: KS: 2022-05-13: Not the best solution, but at least program not crashes
+                ratio_img = 2 / 3
+
+            ratio_target = self.getTargetRatio()
+            print('SetImageIdx() ratio_img:', ratio_img)
+            for bbox in self.defaultBboxesPortrait:
+                bbox_copy = QtCore.QRectF(bbox)
+                bbox_copy.setWidth(bbox_copy.width() * ratio_img * ratio_target)
+                bbox_copy.setHeight(bbox_copy.width() / ratio_img / ratio_target)
+                print('SetImageIdx() bbox_copy: ', bbox_copy)
+                bbox_copy.moveCenter(QtCore.QPointF(0.5, 0.5))
+                print('SetImageIdx() bbox_copy: ', bbox_copy)
+                bboxes.append(bbox_copy)
+            print('SetImageIdx() bboxes 3:', bboxes)
+
+            self.image.setBboxes01(bboxes)
+            stay_inside = self.areBboxesInsideImage(bboxes)
+            print('SetImageIdx() stay_inside:', stay_inside)
+            self.checkboxStayInside.setChecked(stay_inside)
+
+    def updateInfo(self):
+        bboxes = self.image.getBboxes01()
+        # print('images:', self.images)
+        print('bboxes:', bboxes)
+        # self.labelInfoPath.setText(self.images[self.imageIdx])
+        self.labelInfoScale.setText(
+            'in -> out scale: %02f' % (bboxes[1].width() / bboxes[0].width() if bboxes[0].width() > 0 else -1))
+
+    def getTargetRatio(self) -> float:
+        return float(self._target_ratio)
+
+    def setTargetRatio(self, ratio: float):
+        if 0 < ratio <= 10 and ratio != self._target_ratio:
+            self._target_ratio = ratio
+            self.targetRatioChanged.emit()
+
+    @staticmethod
+    def areBboxesInsideImage(bboxes):
+        inside = True
+        for bbox in bboxes:
+            if bbox.left() < 0 or bbox.top() < 0 or bbox.right() > 1 or bbox.bottom() > 1:
+                inside = False
+            print('areBboxesInsideImage() bbox:', bbox, 'inside:', inside)
+        print('areBboxesInsideImage() return ', inside)
+        return inside
+
+
 class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
     scene_changed = QtCore.Signal(int)
 
     def __init__(self, parent=None):
-        QtWidgets.QWidget.__init__(self)
-        self.parent: Ui_mainWindow = parent
+        QtWidgets.QWidget.__init__(self, parent, QtCore.Qt.WindowType.Window)
         self.setupUi(self)
 
         self.installEventFilter(self)
@@ -665,7 +761,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         self.updateDialPosition()
 
     def close(self):
-        self.parent.project.mv_show.set_state(Show_States.STOPPED)
+        self.parent().project.mv_show.set_state(Show_States.STOPPED)
         super().close()
 
     def eventFilter(self, source, event):
@@ -684,7 +780,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         return super(Ui_presenterView, self).eventFilter(source, event)
 
     def scene_runner(self, scene_index=None):
-        if self.parent.project.mv_show.state() != Show_States.RUNNING:
+        if self.parent().project.mv_show.state() != Show_States.RUNNING:
             self.progress_animation.stop()
             self.scene_timer.stop()
             return
@@ -694,12 +790,12 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             QtCore.qDebug(f"Fading out scene {self.current_scene}")
             return
 
-        scene = self.parent.project.mv_show.getScene(scene_index)
+        scene = self.parent().project.mv_show.getScene(scene_index)
 
         if 0 <= scene.in_point < scene.out_point:
             duration = scene.out_point - scene.in_point
         elif scene.duration == -1:
-            duration = self.parent.project.settings.getProperty("default_delay")
+            duration = self.parent().project.settings.getProperty("default_delay")
         else:
             duration = scene.duration
         self.progress_animation.setDuration(duration)
@@ -717,7 +813,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         QtCore.qDebug(f"Running scene {self.current_scene} for {timeStringFromMsec(duration)}")
 
     def changeScene(self, action, index=None):
-        length = self.parent.project.mv_show.length()
+        length = self.parent().project.mv_show.length()
 
         if length == 0:
             return False
@@ -733,19 +829,19 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
         else:
             return False
 
-        scene = self.parent.project.mv_show.getScene(self.current_scene)
-        prev_scene = self.parent.project.mv_show.getScene(self.current_scene - 1) \
+        scene = self.parent().project.mv_show.getScene(self.current_scene)
+        prev_scene = self.parent().project.mv_show.getScene(self.current_scene - 1) \
             if self.current_scene > 0 else None
-        next_scene = self.parent.project.mv_show.getScene(self.current_scene + 1) \
+        next_scene = self.parent().project.mv_show.getScene(self.current_scene + 1) \
             if self.current_scene < (length - 1) else None
 
         self.label_sceneCounter.setText(f"{self.current_scene + 1}/{length}")
         self.updatePresenterView(scene, prev_scene, next_scene)
 
-        # if self.parent.project.mv_show.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
+        # if self.parent().project.mv_show.state() in (Show_States.RUNNING, Show_States.PAUSED, Show_States.FINISHED):
         self.mv.loadScene(scene)
-        if self.parent.project.mv_show.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
-            self.parent.project.mv_show.set_state(Show_States.FINISHED)
+        if self.parent().project.mv_show.state() == Show_States.RUNNING and self.current_scene >= (length - 1):
+            self.parent().project.mv_show.set_state(Show_States.FINISHED)
 
         QtCore.qDebug(f"Changing scene to {self.current_scene}")
         self.scene_changed.emit(self.current_scene)
@@ -834,7 +930,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
             self.mv.audioPlayer.setSource(QtCore.QUrl())
 
     def startShow(self):
-        state = self.parent.project.mv_show.state()
+        state = self.parent().project.mv_show.state()
         try:
             self.mv.scene_fade_out_anim.finished.disconnect()
         except TypeError:
@@ -843,19 +939,19 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
         if state in [Show_States.STOPPED, Show_States.FINISHED]:
             self.mv.show()
-            self.parent.project.mv_show.set_state(Show_States.RUNNING)
+            self.parent().project.mv_show.set_state(Show_States.RUNNING)
         elif state == Show_States.PAUSED:
-            self.parent.project.mv_show.set_state(Show_States.RUNNING)
+            self.parent().project.mv_show.set_state(Show_States.RUNNING)
 
     def pauseShow(self):
-        if self.parent.project.mv_show.state() == Show_States.RUNNING:
+        if self.parent().project.mv_show.state() == Show_States.RUNNING:
             try:
                 self.mv.scene_fade_out_anim.finished.disconnect()
             except TypeError:
                 # A TypeError is raised if disconnect is called and there are no active connections
                 pass
 
-            self.parent.project.mv_show.set_state(Show_States.PAUSED)
+            self.parent().project.mv_show.set_state(Show_States.PAUSED)
             self.progressBar_state.setValue(0)
             # TODO: We could pause instead of stopping, but QTimer does not support pause and resume out of the box.
 
@@ -868,8 +964,7 @@ class Ui_presenterView(QtWidgets.QWidget, Ui_Form_presenterView):
 
 class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
     def __init__(self, parent=None):
-        QtWidgets.QWidget.__init__(self)
-        self.parent: Ui_presenterView = parent
+        QtWidgets.QWidget.__init__(self, parent, QtCore.Qt.WindowType.Window)
         self.setupUi(self)
 
         self.installEventFilter(self)
@@ -956,10 +1051,10 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                 self.out_point_connection = self.videoPlayer.positionChanged.connect(
                     lambda x: self.manageOutPoint(scene.out_point))
 
-            if scene.play_video_audio and not self.parent.pushButton_audio_quiet.isChecked():
-                self.parent.pushButton_audio_quiet.click()
+            if scene.play_video_audio and not self.parent().pushButton_audio_quiet.isChecked():
+                self.parent().pushButton_audio_quiet.click()
 
-            self.parent.parent.project.mv_show.state_changed.connect(self.manageVideoPlayback)
+            self.parent().parent().project.mv_show.state_changed.connect(self.manageVideoPlayback)
 
             video_item = QtMultimediaWidgets.QGraphicsVideoItem()
             video_item.setSize(self.graphicsView.size().toSizeF())
@@ -1002,6 +1097,8 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
         self.graphicsView.setScene(graphics_scene)
 
         self.scene_fade_in_anim.start()
+        pz = pan_and_zoom(self.graphicsView)
+        pz.start()
 
         if scene.audio_source:
             # TODO: Check if MIME Type of scene.audio_source is supported and the file exists
@@ -1012,7 +1109,7 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
                 self.audioPlayer.setSource(audio_url)
                 self.audioPlayer.play()
         else:
-            self.parent.controlAudio("stop")
+            self.parent().controlAudio("stop")
 
     def manageInPoint(self, pos):
         if self.videoPlayer.isSeekable() and self.videoPlayer.isPlaying():
@@ -1029,9 +1126,9 @@ class Ui_multiVisionShow(QtWidgets.QWidget, Ui_Form_multiVisionShow):
             self.videoPlayer.stop()
 
     def manageVideoPlayback(self):
-        if self.parent.parent.project.mv_show.state() == Show_States.PAUSED:
+        if self.parent().parent().project.mv_show.state() == Show_States.PAUSED:
             self.videoPlayer.pause()
-        elif self.parent.parent.project.mv_show.state() == Show_States.RUNNING:
+        elif self.parent().parent().project.mv_show.state() == Show_States.RUNNING:
             self.videoPlayer.play()
 
 

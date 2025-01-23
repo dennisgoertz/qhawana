@@ -1,16 +1,19 @@
 import hashlib
 from typing import Optional
 
-import PIL.ImageQt
 import av
-import xmlschema
 import gpxpy
+import math
+import xmlschema
+import PIL.ImageQt
 
 from PySide6 import QtCore, QtWidgets, QtGui, QtMultimedia, QtPositioning
 
 import importlib.resources
 
 res = importlib.resources.files("resources")
+
+EARTH_C = 40075017  # equatorial circumference of the Earth in meters
 
 
 def forEachItemInModel(model: QtCore.QAbstractItemModel, parent=QtCore.QModelIndex()):
@@ -121,3 +124,15 @@ def geoPathFromGPX(path) -> QtPositioning.QGeoPath:
         geo_path.addCoordinate(geo_coordinate)
 
     return geo_path
+
+
+def osmDistancePerTile(lat: float, zoom_level: int):
+    """
+    :param lat: Latitude in degrees, expects values from -90 to +90
+    :param zoom_level: OSM zoom level, expects integers from 0 to 20
+    :return: Horizontal distance for an OSM tile at the given latitude and zoom level in meters
+    """
+    assert -90 <= lat <= 90, "Latitudes are floats between -90 and +90"
+    assert zoom_level is int and 0 <= zoom_level <= 20, "OSM zoom levels are integers between 0 and 20"
+
+    return EARTH_C * math.cos(lat) / (2 ** zoom_level)
